@@ -24,20 +24,40 @@ class PdfPage:
     text: str
 
 
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+
+
+def _headers_for(url: str) -> dict[str, str]:
+    """BSE returns 403 to non-browser UAs, and 403 again unless Referer matches
+    bseindia.com. NSE's archive subdomain (nsearchives.nseindia.com) similarly
+    wants a Referer to nseindia.com."""
+    base = {
+        "User-Agent": _BROWSER_UA,
+        "Accept": "application/pdf,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    if "bseindia.com" in url:
+        base["Referer"] = "https://www.bseindia.com/"
+    elif "nseindia.com" in url:
+        base["Referer"] = "https://www.nseindia.com/"
+    return base
+
+
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
     retry=retry_if_exception_type((httpx.HTTPError, OSError)),
     reraise=True,
 )
-def download_pdf(url: str, timeout: float = 60.0) -> bytes:
-    headers = {
-        "User-Agent": (
-            "feed-normalguy-scraper/1.0 (+https://feed.normalguy.co.in)"
-        ),
-        "Accept": "application/pdf,*/*;q=0.8",
-    }
-    with httpx.Client(follow_redirects=True, timeout=timeout, headers=headers) as c:
+def download_pdf(url: str, timeout: float = 30.0) -> bytes:
+    with httpx.Client(
+        follow_redirects=True,
+        timeout=httpx.Timeout(timeout, connect=10.0),
+        headers=_headers_for(url),
+    ) as c:
         r = c.get(url)
         r.raise_for_status()
         return r.content
