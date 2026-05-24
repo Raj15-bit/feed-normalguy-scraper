@@ -10,10 +10,10 @@ import sys
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
-from scraper.bse_client import fetch_announcements
 from scraper.config import get_config, setup_logging
 from scraper.db import list_companies
 from scraper.pipeline import process_announcement
+from scraper.sources import fetch_all_for
 
 log = logging.getLogger("scraper.backfill")
 
@@ -22,7 +22,7 @@ def run(days: int, company_slug: str | None = None) -> int:
     setup_logging()
     cfg = get_config()
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    companies = list_companies(only_with_bse=True)
+    companies = list_companies(only_with_bse=False)
     if company_slug:
         companies = [c for c in companies if c.slug == company_slug]
     log.info(
@@ -34,13 +34,9 @@ def run(days: int, company_slug: str | None = None) -> int:
     statuses: Counter[str] = Counter()
     processed = 0
     for company in companies:
-        if not company.bse_code:
+        if not (company.bse_code or company.nse_symbol):
             continue
-        try:
-            anns = fetch_announcements(company.bse_code, since=since)
-        except Exception as e:
-            log.exception("fetch failed for %s: %s", company.slug, e)
-            continue
+        anns = fetch_all_for(company, since=since)
         log.info("company=%s anns=%d", company.slug, len(anns))
         for ann in anns:
             if processed >= cfg.max_filings_per_run:

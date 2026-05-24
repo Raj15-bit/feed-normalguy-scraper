@@ -1,17 +1,17 @@
-"""Thin wrapper around Benny Thadikaran's `bse` package.
+"""Direct BSE corporate-announcements JSON client (no third-party lib).
 
-The bse package is unofficial; its API shape varies slightly between releases.
-We isolate everything through this module so a future swap (e.g. NSE) requires
-changes in only one place.
+BSE exposes `api.bseindia.com/BseIndiaAPI/api/AnnGetData/w` which returns
+a JSON envelope `{"Table": [...]}`. We hit it per-scrip with a sliding
+date window and map each row into our internal Announcement dataclass.
 """
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
-from bse import BSE
+import httpx
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -21,34 +21,39 @@ from tenacity import (
 
 log = logging.getLogger(__name__)
 
+BSE_ANN_URL = "https://api.bseindia.com/BseIndiaAPI/api/AnnGetData/w"
+
+_DEFAULT_HEADERS = {
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Origin": "https://www.bseindia.com",
+    "Referer": "https://www.bseindia.com/",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+}
+
 
 @dataclass
 class Announcement:
     bse_code: str
-    title: str           # Either headline or news subject
-    posted_at: datetime  # UTC
-    source_url: str      # PDF URL on BSE
+    title: str
+    posted_at: datetime
+    source_url: str
     bse_category: Optional[str]
     bse_subcategory: Optional[str]
+    source: str = "bse"  # 'bse' or 'nse'
 
 
-_bse: Optional[BSE] = None
-
-
-def _client() -> BSE:
-    global _bse
-    if _bse is None:
-        # `BSE()` requires a dir for caching; use system tmp to avoid clutter.
-        import tempfile
-
-        _bse = BSE(tempfile.gettempdir())
-    return _bse
+def _client() -> httpx.Client:
+    return httpx.Client(headers=_DEFAULT_HEADERS, timeout=httpx.Timeout(20.0))
 
 
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
-    retry=retry_if_exception_type(Exception),
+    retry=retry_if_exception_type(httpx.HTTPError),
     reraise=True,
 )
 def fetch_announcements(
@@ -56,30 +61,35 @@ def fetch_announcements(
     *,
     since: Optional[datetime] = None,
 ) -> list[Announcement]:
-    """Return announcements for a single scrip, newest-first.
-
-    The `bse` package's `announcements()` returns up to a couple hundred recent
-    items. We filter by `since` client-side.
-    """
+    """Return BSE announcements for one scrip, filtered to >= `since`."""
     since = since or (datetime.now(timezone.utc) - timedelta(days=2))
-    try:
-        # bse 1.x: BSE.announcements(scripcode, segment="equity", from_date=..., to_date=...)
-        raw = _client().announcements(scripcode=bse_code, segment="equity")
-    except TypeError:
-        # Older bse versions accepted only positional args.
-        raw = _client().announcements(bse_code)
-    return [
-        ann
-        for ann in (_to_announcement(bse_code, item) for item in raw or [])
-        if ann is not None and ann.posted_at >= since
-    ]
+    to_date = datetime.now(timezone.utc)
+    params = {
+        "strCat": "-1",
+        "strPrevDate": since.strftime("%Y%m%d"),
+        "strScrip": bse_code,
+        "strSearch": "P",
+        "strToDate": to_date.strftime("%Y%m%d"),
+        "strType": "C",
+    }
+    with _client() as c:
+        r = c.get(BSE_ANN_URL, params=params)
+        r.raise_for_status()
+        data = r.json()
+    rows = data.get("Table") or data.get("data") or []
+    out: list[Announcement] = []
+    for row in rows:
+        ann = _to_announcement(bse_code, row)
+        if ann and ann.posted_at >= since:
+            out.append(ann)
+    return out
 
 
 def _to_announcement(bse_code: str, raw: dict[str, Any]) -> Optional[Announcement]:
-    # Field names vary by bse version. We probe common spellings.
     title = (
         raw.get("HEADLINE")
         or raw.get("NEWSSUB")
+        or raw.get("NEWS_SUB")
         or raw.get("headline")
         or raw.get("news_subject")
         or raw.get("subject")
@@ -90,11 +100,10 @@ def _to_announcement(bse_code: str, raw: dict[str, Any]) -> Optional[Announcemen
         raw.get("ATTACHMENTNAME")
         or raw.get("attachment")
         or raw.get("pdf_link")
-        or raw.get("attachmentName")
     )
     if not url:
         return None
-    if not url.startswith("http"):
+    if not str(url).startswith("http"):
         url = f"https://www.bseindia.com/xml-data/corpfiling/AttachLive/{url}"
     posted = (
         raw.get("NEWS_DT")
@@ -102,12 +111,7 @@ def _to_announcement(bse_code: str, raw: dict[str, Any]) -> Optional[Announcemen
         or raw.get("news_dt")
         or raw.get("posted_at")
     )
-    if isinstance(posted, str):
-        posted_at = _parse_dt(posted)
-    elif isinstance(posted, datetime):
-        posted_at = posted if posted.tzinfo else posted.replace(tzinfo=timezone.utc)
-    else:
-        posted_at = datetime.now(timezone.utc)
+    posted_at = _parse_dt(posted) if posted else datetime.now(timezone.utc)
     return Announcement(
         bse_code=bse_code,
         title=str(title).strip(),
@@ -115,12 +119,14 @@ def _to_announcement(bse_code: str, raw: dict[str, Any]) -> Optional[Announcemen
         source_url=str(url).strip(),
         bse_category=str(raw.get("CATEGORYNAME") or raw.get("category") or "") or None,
         bse_subcategory=str(raw.get("SUBCATNAME") or raw.get("subcategory") or "") or None,
+        source="bse",
     )
 
 
-def _parse_dt(value: str) -> datetime:
-    # BSE often returns "2026-01-15T11:32:00" or "2026-01-15 11:32:00.0"
-    value = value.replace("Z", "+00:00").strip()
+def _parse_dt(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    s = str(value).replace("Z", "+00:00").strip()
     for fmt in (
         "%Y-%m-%dT%H:%M:%S",
         "%Y-%m-%dT%H:%M:%S.%f",
@@ -129,25 +135,12 @@ def _parse_dt(value: str) -> datetime:
         "%Y-%m-%d",
     ):
         try:
-            dt = datetime.strptime(value[:26] if "." in value else value, fmt)
+            dt = datetime.strptime(s[:26] if "." in s else s, fmt)
             return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
         except ValueError:
             continue
     try:
-        return datetime.fromisoformat(value)
+        return datetime.fromisoformat(s)
     except ValueError:
         log.warning("could not parse datetime %r — defaulting to now()", value)
         return datetime.now(timezone.utc)
-
-
-def iter_announcements_for_companies(
-    bse_codes: Iterable[str],
-    *,
-    since: Optional[datetime] = None,
-) -> Iterable[Announcement]:
-    for code in bse_codes:
-        try:
-            yield from fetch_announcements(code, since=since)
-        except Exception as e:
-            log.exception("fetch_announcements failed for %s: %s", code, e)
-            continue
