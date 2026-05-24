@@ -1,0 +1,131 @@
+"""Supabase service-role client + DAO functions used by the scraper."""
+from __future__ import annotations
+
+import hashlib
+import logging
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Optional
+
+from supabase import Client, create_client
+
+from scraper.config import get_config
+
+log = logging.getLogger(__name__)
+
+_client: Optional[Client] = None
+
+
+def supabase() -> Client:
+    global _client
+    if _client is None:
+        cfg = get_config()
+        _client = create_client(cfg.supabase_url, cfg.supabase_service_key)
+    return _client
+
+
+@dataclass
+class Company:
+    id: str
+    slug: str
+    name: str
+    bse_code: Optional[str]
+    nse_symbol: Optional[str]
+
+
+def list_companies(only_with_bse: bool = True) -> list[Company]:
+    q = supabase().table("companies").select("id,slug,name,bse_code,nse_symbol")
+    if only_with_bse:
+        q = q.not_.is_("bse_code", "null")
+    res = q.execute()
+    rows = res.data or []
+    return [
+        Company(
+            id=r["id"],
+            slug=r["slug"],
+            name=r["name"],
+            bse_code=r.get("bse_code"),
+            nse_symbol=r.get("nse_symbol"),
+        )
+        for r in rows
+    ]
+
+
+def filing_slug_for(source_url: str) -> str:
+    return hashlib.md5(source_url.encode("utf-8")).hexdigest()
+
+
+def filing_exists(slug: str) -> bool:
+    res = (
+        supabase()
+        .table("filings")
+        .select("id")
+        .eq("slug", slug)
+        .limit(1)
+        .execute()
+    )
+    return bool(res.data)
+
+
+def insert_filing(
+    *,
+    company_id: str,
+    slug: str,
+    title: str,
+    label: str,
+    source_url: str,
+    posted_at: datetime,
+    page_count: int,
+    bse_category: Optional[str] = None,
+    bse_subcategory: Optional[str] = None,
+) -> str:
+    """Inserts a filing row and returns its id."""
+    res = (
+        supabase()
+        .table("filings")
+        .insert(
+            {
+                "company_id": company_id,
+                "slug": slug,
+                "title": title,
+                "label": label,
+                "source_url": source_url,
+                "posted_at": posted_at.isoformat(),
+                "page_count": page_count,
+                "bse_category": bse_category,
+                "bse_subcategory": bse_subcategory,
+            }
+        )
+        .execute()
+    )
+    if not res.data:
+        raise RuntimeError(f"insert_filing returned no row for slug={slug}")
+    return res.data[0]["id"]
+
+
+def insert_chunks(
+    *,
+    filing_id: str,
+    company_id: str,
+    chunks: list[dict[str, Any]],
+) -> None:
+    """chunks: [{ "page": int|None, "text": str, "embedding": list[float] }, ...]"""
+    if not chunks:
+        return
+    rows = [
+        {
+            "filing_id": filing_id,
+            "company_id": company_id,
+            "page": c.get("page"),
+            "text": c["text"],
+            "embedding": c["embedding"],
+        }
+        for c in chunks
+    ]
+    supabase().table("filing_chunks").insert(rows).execute()
+
+
+def queue_alerts(filing_id: str) -> int:
+    """Calls the queue_filing_alerts RPC; returns number of rows queued."""
+    res = supabase().rpc("queue_filing_alerts", {"p_filing_id": filing_id}).execute()
+    return int(res.data or 0)

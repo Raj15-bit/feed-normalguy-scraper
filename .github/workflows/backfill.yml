@@ -1,0 +1,40 @@
+name: backfill
+
+# Manually triggered only. Use sparingly — this can rack up OpenAI bill.
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "How many days of history to pull"
+        required: true
+        default: "365"
+        type: string
+      company_slug:
+        description: "Optional: limit to one company slug (e.g. reliance)"
+        required: false
+        type: string
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350  # GitHub max is 360 min
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Run backfill
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          SCRAPER_MAX_FILINGS_PER_RUN: "10000"
+        run: |
+          ARGS="--days ${{ github.event.inputs.days }}"
+          if [ -n "${{ github.event.inputs.company_slug }}" ]; then
+            ARGS="$ARGS --company-slug ${{ github.event.inputs.company_slug }}"
+          fi
+          python -m scraper.backfill $ARGS

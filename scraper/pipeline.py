@@ -1,0 +1,109 @@
+"""Per-filing pipeline reused by main.py (cron) and backfill.py (one-shot).
+
+Steps:
+  1. Skip if slug already exists (dedup by MD5 of source URL).
+  2. Download PDF to RAM, extract text per page.
+  3. Skip if text is too short (scanned image).
+  4. Classify label (mapping → regex → DeepSeek).
+  5. Chunk into ~800-token blocks preserving page boundaries.
+  6. Embed all chunks in batches.
+  7. Insert filing row, then chunks.
+  8. Queue alert fanout to watchers.
+"""
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+
+from scraper.bse_client import Announcement
+from scraper.chunker import chunk_pages
+from scraper.classifier import classify
+from scraper.db import (
+    Company,
+    filing_exists,
+    filing_slug_for,
+    insert_chunks,
+    insert_filing,
+    queue_alerts,
+)
+from scraper.embedder import embed_all
+from scraper.pdf_extract import download_pdf, extract_pages
+
+log = logging.getLogger(__name__)
+
+
+@dataclass
+class PipelineResult:
+    status: str  # 'inserted' | 'skipped_existing' | 'skipped_scanned' | 'failed'
+    filing_id: str | None = None
+    chunks: int = 0
+    alerts_queued: int = 0
+    error: str | None = None
+
+
+def process_announcement(
+    *, company: Company, ann: Announcement
+) -> PipelineResult:
+    slug = filing_slug_for(ann.source_url)
+    try:
+        if filing_exists(slug):
+            return PipelineResult(status="skipped_existing")
+
+        pdf_bytes = download_pdf(ann.source_url)
+        pages = extract_pages(pdf_bytes)
+        if pages is None:
+            return PipelineResult(status="skipped_scanned")
+
+        label = classify(
+            title=ann.title,
+            bse_category=ann.bse_category,
+            bse_subcategory=ann.bse_subcategory,
+        )
+
+        chunks = chunk_pages(pages)
+        if not chunks:
+            return PipelineResult(status="skipped_scanned")
+
+        embeddings = embed_all([c.text for c in chunks])
+
+        filing_id = insert_filing(
+            company_id=company.id,
+            slug=slug,
+            title=ann.title,
+            label=label,
+            source_url=ann.source_url,
+            posted_at=ann.posted_at,
+            page_count=len(pages),
+            bse_category=ann.bse_category,
+            bse_subcategory=ann.bse_subcategory,
+        )
+        insert_chunks(
+            filing_id=filing_id,
+            company_id=company.id,
+            chunks=[
+                {"page": c.page, "text": c.text, "embedding": emb}
+                for c, emb in zip(chunks, embeddings)
+            ],
+        )
+        alerts = 0
+        try:
+            alerts = queue_alerts(filing_id)
+        except Exception as e:
+            log.warning("queue_alerts failed for %s: %s", filing_id, e)
+        log.info(
+            "inserted filing=%s company=%s chunks=%d label=%s alerts=%d",
+            filing_id,
+            company.slug,
+            len(chunks),
+            label,
+            alerts,
+        )
+        return PipelineResult(
+            status="inserted",
+            filing_id=filing_id,
+            chunks=len(chunks),
+            alerts_queued=alerts,
+        )
+    except Exception as e:
+        log.exception("process_announcement failed for %s: %s", ann.source_url, e)
+        return PipelineResult(status="failed", error=str(e))
