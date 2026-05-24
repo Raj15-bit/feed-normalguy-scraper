@@ -15,7 +15,11 @@ load_dotenv()
 class Config:
     supabase_url: str
     supabase_service_key: str
-    openai_api_key: str
+    # openai_api_key is optional per DeepSeek-only rule (see
+    # main repo docs/INFRASTRUCTURE.md). When None, embedder.embed_all()
+    # returns Nones and filing_chunks.embedding is stored as NULL;
+    # hybrid_search falls back to Postgres FTS.
+    openai_api_key: Optional[str]
     deepseek_api_key: str
     max_filings_per_run: int
     batch_size_embeddings: int
@@ -39,7 +43,7 @@ def get_config() -> Config:
     _cached = Config(
         supabase_url=_required("SUPABASE_URL"),
         supabase_service_key=_required("SUPABASE_SERVICE_KEY"),
-        openai_api_key=_required("OPENAI_API_KEY"),
+        openai_api_key=os.environ.get("OPENAI_API_KEY") or None,
         deepseek_api_key=_required("DEEPSEEK_API_KEY"),
         max_filings_per_run=int(os.environ.get("SCRAPER_MAX_FILINGS_PER_RUN", "200")),
         batch_size_embeddings=int(os.environ.get("SCRAPER_BATCH_SIZE_EMBEDDINGS", "100")),

@@ -21,10 +21,16 @@ MODEL = "text-embedding-3-small"
 _client: Optional[OpenAI] = None
 
 
+_skipped_warning_logged = False
+
+
 def _openai() -> OpenAI:
     global _client
     if _client is None:
-        _client = OpenAI(api_key=get_config().openai_api_key)
+        key = get_config().openai_api_key
+        if not key:
+            raise RuntimeError("OPENAI_API_KEY missing — should not reach _openai()")
+        _client = OpenAI(api_key=key)
     return _client
 
 
@@ -39,11 +45,24 @@ def _embed_batch(texts: list[str]) -> list[list[float]]:
     return [d.embedding for d in res.data]
 
 
-def embed_all(texts: list[str], batch_size: Optional[int] = None) -> list[list[float]]:
+def embed_all(
+    texts: list[str], batch_size: Optional[int] = None
+) -> list[Optional[list[float]]]:
+    """Returns embeddings for each input text. When OPENAI_API_KEY is unset
+    (DeepSeek-only mode), returns a list of Nones the same length as `texts`
+    so callers can still pair chunks with rows. filing_chunks.embedding
+    is nullable; hybrid_search falls back to Postgres FTS.
+    """
     if not texts:
         return []
+    global _skipped_warning_logged
+    if not get_config().openai_api_key:
+        if not _skipped_warning_logged:
+            log.info("embeddings skipped (DeepSeek-only mode, OPENAI_API_KEY unset)")
+            _skipped_warning_logged = True
+        return [None] * len(texts)
     batch_size = batch_size or get_config().batch_size_embeddings
-    out: list[list[float]] = []
+    out: list[Optional[list[float]]] = []
     for i in range(0, len(texts), batch_size):
         chunk = texts[i : i + batch_size]
         log.info("embedding batch %d/%d (size=%d)",
