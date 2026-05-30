@@ -1,0 +1,60 @@
+name: migrate
+
+# One-shot DB migration runner. Applies every .sql file in seeds/ in
+# lexical order via psql, using SUPABASE_DB_URL.
+#
+# SETUP (one time):
+#   Repo Settings -> Secrets and variables -> Actions -> New secret:
+#     SUPABASE_DB_URL = postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres
+#   Copy that string from Supabase Dashboard -> Settings -> Database
+#   -> Connection string -> URI (tick "Use connection pooling").
+#
+# Then: Actions tab -> migrate -> Run workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      only_file:
+        description: "Optional: apply only this file (e.g. seeds/0002_filing_summary.sql). Leave blank for all."
+        required: false
+        type: string
+
+concurrency:
+  group: migrate
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install psql client
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Apply SQL
+        env:
+          PGCONN: ${{ secrets.SUPABASE_DB_URL }}
+          ONLY_FILE: ${{ github.event.inputs.only_file }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PGCONN}" ]; then
+            echo "::error::SUPABASE_DB_URL secret is not set. Add it under repo Settings -> Secrets -> Actions."
+            exit 1
+          fi
+          if [ -n "${ONLY_FILE}" ]; then
+            if [ ! -f "${ONLY_FILE}" ]; then
+              echo "::error::file not found: ${ONLY_FILE}"
+              exit 1
+            fi
+            echo "applying ${ONLY_FILE}"
+            psql "${PGCONN}" -v ON_ERROR_STOP=1 -f "${ONLY_FILE}"
+          else
+            shopt -s nullglob
+            for f in $(ls seeds/*.sql | sort); do
+              echo "applying ${f}"
+              psql "${PGCONN}" -v ON_ERROR_STOP=1 -f "${f}"
+            done
+          fi
+          echo "done."
