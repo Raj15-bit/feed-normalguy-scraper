@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from scraper.bse_client import Announcement
 from scraper.chunker import chunk_pages
 from scraper.classifier import classify
+from scraper.config import get_config
 from scraper.db import (
     Company,
     filing_exists,
@@ -28,6 +29,7 @@ from scraper.db import (
 )
 from scraper.embedder import embed_all
 from scraper.pdf_extract import download_pdf, extract_pages
+from scraper.summarizer import summarize
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +68,14 @@ def process_announcement(
 
         embeddings = embed_all([c.text for c in chunks])
 
+        summary: str | None = None
+        if get_config().summary_enabled:
+            try:
+                body = "\n\n".join(p.text for p in pages if p.text)
+                summary = summarize(title=ann.title, label=label, body=body) or None
+            except Exception as e:
+                log.warning("summarize failed for %s: %s", ann.source_url, e)
+
         filing_id = insert_filing(
             company_id=company.id,
             slug=slug,
@@ -76,6 +86,7 @@ def process_announcement(
             page_count=len(pages),
             bse_category=ann.bse_category,
             bse_subcategory=ann.bse_subcategory,
+            summary=summary,
         )
         insert_chunks(
             filing_id=filing_id,

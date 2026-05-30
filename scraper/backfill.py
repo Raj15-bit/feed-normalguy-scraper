@@ -48,6 +48,13 @@ def run(days: int, company_slug: str | None = None) -> int:
         if processed >= cfg.max_filings_per_run:
             break
     log.info("backfill complete processed=%d %s", processed, dict(statuses))
+    failed = statuses.get("failed", 0)
+    if processed >= 5 and (failed / processed) > cfg.fail_threshold:
+        log.error(
+            "fail-loud: failure rate %.0f%% (%d/%d) exceeds threshold %.0f%%",
+            100 * failed / processed, failed, processed, 100 * cfg.fail_threshold,
+        )
+        return 1
     return 0
 
 

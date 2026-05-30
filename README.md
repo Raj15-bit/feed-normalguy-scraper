@@ -93,18 +93,21 @@ python -m scraper.main
 | `scraper/classifier.py` | 3-layer: BSE subcategory map → title regex → DeepSeek |
 | `scraper/chunker.py` | Splits per-page text into ~800-token chunks |
 | `scraper/embedder.py` | Batched OpenAI text-embedding-3-small calls |
+| `scraper/summarizer.py` | DeepSeek 2-4 sentence summary written to `filings.summary` |
 | `scraper/pipeline.py` | Per-filing orchestrator (used by main + backfill) |
 | `scraper/main.py` | Cron entrypoint — last 24h of filings |
 | `scraper/backfill.py` | One-time historical pull (--days N) |
 | `.github/workflows/scrape.yml` | Every-2-hours cron |
 | `.github/workflows/backfill.yml` | Manual trigger only |
 | `seeds/0001_nifty50.sql` | One-time Nifty 50 companies seed |
+| `seeds/0002_filing_summary.sql` | Adds `filings.summary` column for the DeepSeek summary |
 
 ## Operational notes
 
-- **Scanned PDFs are skipped.** pymupdf returns empty text for image-only PDFs; we detect this (`< 100 chars total`) and move on. OCR (Tesseract / Vision API) deferred — most BSE filings are text-extractable.
+- **Scanned PDFs are OCR'd via Tesseract.** When pymupdf's text layer is `< 100 chars total`, we render each page (capped at `SCRAPER_OCR_MAX_PAGES`, default 30) and run `pytesseract`. Workflows `apt-get install tesseract-ocr` before pip install. Set `SCRAPER_OCR_ENABLED=0` to revert to skip-on-scanned behaviour.
+- **DeepSeek summary per filing.** A 2-4 sentence summary is generated from the extracted text and stored on `filings.summary`. Apply `seeds/0002_filing_summary.sql` once. Disable with `SCRAPER_SUMMARY_ENABLED=0`.
 - **Dedupe** is by MD5 of the PDF's source URL, stored as `filings.slug`. Re-running over the same window is safe (no double-insert).
-- **Failures don't poison the queue.** A bad PDF or transient API error is logged and we move to the next filing.
+- **Fail-loud.** Per-filing errors are logged and the run continues, but `main`/`backfill` exit `1` if the failure rate exceeds `SCRAPER_FAIL_THRESHOLD` (default 20%, ignored under 5 attempts). GitHub Actions then shows the run red.
 - **The cron has an upper bound** of `SCRAPER_MAX_FILINGS_PER_RUN` (default 200) per run to keep within the 25-min GitHub Actions step timeout.
 - **No PDFs are stored** on our side. Only metadata + extracted text chunks + embeddings.
 
