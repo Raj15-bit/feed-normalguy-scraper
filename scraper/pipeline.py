@@ -68,11 +68,18 @@ def process_announcement(
 
         embeddings = embed_all([c.text for c in chunks])
 
-        summary: str | None = None
+        ai_headline: str | None = None
+        ai_bullets: list[str] | None = None
         if get_config().summary_enabled:
             try:
                 body = "\n\n".join(p.text for p in pages if p.text)
-                summary = summarize(title=ann.title, label=label, body=body) or None
+                ai_headline, ai_bullets = summarize(
+                    title=ann.title,
+                    label=label,
+                    body=body,
+                    bse_category=ann.bse_category,
+                    bse_subcategory=ann.bse_subcategory,
+                )
             except Exception as e:
                 log.warning("summarize failed for %s: %s", ann.source_url, e)
 
@@ -86,7 +93,8 @@ def process_announcement(
             page_count=len(pages),
             bse_category=ann.bse_category,
             bse_subcategory=ann.bse_subcategory,
-            summary=summary,
+            ai_headline=ai_headline,
+            ai_summary_bullets=ai_bullets,
         )
         insert_chunks(
             filing_id=filing_id,

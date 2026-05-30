@@ -1,73 +1,72 @@
-"""Batch OpenAI embeddings (text-embedding-3-small, 1536 dim per D-003)."""
+"""Keyless local embeddings via fastembed (BAAI/bge-small-en-v1.5, 384 dim).
+
+No API key, no billing, no per-call cost — the ONNX model runs on the GitHub
+Actions CPU runner. This replaces the OpenAI text-embedding-3-small path
+(D-003 anticipated this exact fallback: "swap the embedder for a local
+bge-small-en-v1.5 model at 384 dims and re-backfill"). The app's
+filing_chunks.embedding column is migrated to vector(384) to match.
+
+`embed_all` keeps the same signature and Optional[...] return type so
+pipeline.py is unchanged; on any model failure it returns Nones and the row
+inserts with a NULL embedding (hybrid_search falls back to Postgres FTS).
+"""
 from __future__ import annotations
 
 import logging
 from typing import Optional
 
-from openai import OpenAI
-from tenacity import (
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
-
-from scraper.config import get_config
-
 log = logging.getLogger(__name__)
 
-MODEL = "text-embedding-3-small"
+MODEL = "BAAI/bge-small-en-v1.5"
+DIM = 384
 
-_client: Optional[OpenAI] = None
-
-
-_skipped_warning_logged = False
-
-
-def _openai() -> OpenAI:
-    global _client
-    if _client is None:
-        key = get_config().openai_api_key
-        if not key:
-            raise RuntimeError("OPENAI_API_KEY missing — should not reach _openai()")
-        _client = OpenAI(api_key=key)
-    return _client
+_model = None  # lazily-instantiated fastembed.TextEmbedding
+_load_failed = False
 
 
-@retry(
-    stop=stop_after_attempt(5),
-    wait=wait_exponential(multiplier=2, min=2, max=60),
-    retry=retry_if_exception_type(Exception),
-    reraise=True,
-)
-def _embed_batch(texts: list[str]) -> list[list[float]]:
-    res = _openai().embeddings.create(model=MODEL, input=texts)
-    return [d.embedding for d in res.data]
+def _get_model():
+    global _model, _load_failed
+    if _model is not None or _load_failed:
+        return _model
+    try:
+        from fastembed import TextEmbedding
+
+        log.info("loading embedding model %s (first call downloads ONNX)", MODEL)
+        _model = TextEmbedding(model_name=MODEL)
+    except Exception as e:  # pragma: no cover
+        log.warning("fastembed load failed (%s) — embeddings disabled this run", e)
+        _load_failed = True
+        _model = None
+    return _model
 
 
 def embed_all(
     texts: list[str], batch_size: Optional[int] = None
 ) -> list[Optional[list[float]]]:
-    """Returns embeddings for each input text. When OPENAI_API_KEY is unset
-    (DeepSeek-only mode), returns a list of Nones the same length as `texts`
-    so callers can still pair chunks with rows. filing_chunks.embedding
-    is nullable; hybrid_search falls back to Postgres FTS.
+    """Return one 384-float embedding per input text. Returns Nones (same
+    length) if the model can't load, so callers still pair chunks with rows.
     """
     if not texts:
         return []
-    global _skipped_warning_logged
-    if not get_config().openai_api_key:
-        if not _skipped_warning_logged:
-            log.info("embeddings skipped (DeepSeek-only mode, OPENAI_API_KEY unset)")
-            _skipped_warning_logged = True
+    model = _get_model()
+    if model is None:
         return [None] * len(texts)
-    batch_size = batch_size or get_config().batch_size_embeddings
-    out: list[Optional[list[float]]] = []
-    for i in range(0, len(texts), batch_size):
-        chunk = texts[i : i + batch_size]
-        log.info("embedding batch %d/%d (size=%d)",
-                 i // batch_size + 1,
-                 (len(texts) + batch_size - 1) // batch_size,
-                 len(chunk))
-        out.extend(_embed_batch(chunk))
-    return out
+    try:
+        # fastembed yields numpy arrays in input order.
+        vecs = list(model.embed(texts))
+        out: list[Optional[list[float]]] = []
+        for v in vecs:
+            arr = v.tolist() if hasattr(v, "tolist") else list(v)
+            out.append([float(x) for x in arr])
+        if len(out) != len(texts):
+            log.warning(
+                "embed count mismatch (%d vs %d) — padding with None",
+                len(out),
+                len(texts),
+            )
+            while len(out) < len(texts):
+                out.append(None)
+        return out
+    except Exception as e:
+        log.warning("embed_all failed (%s) — inserting NULL embeddings", e)
+        return [None] * len(texts)

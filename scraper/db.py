@@ -78,22 +78,35 @@ def insert_filing(
     page_count: int,
     bse_category: Optional[str] = None,
     bse_subcategory: Optional[str] = None,
-    summary: Optional[str] = None,
+    ai_headline: Optional[str] = None,
+    ai_summary_bullets: Optional[list[str]] = None,
 ) -> str:
-    """Inserts a filing row and returns its id."""
+    """Inserts a filing row and returns its id.
+
+    Writes the headline + bullet summary into the app's canonical columns
+    (ai_headline / ai_summary_bullets / ai_summary_generated_at — migration
+    0006), which is what the home feed card renders. Also seeds the multi-label
+    `labels` array (migration 0003) with the primary label so cards show a
+    tick-mark badge immediately; a later re-classify pass can widen it.
+    """
+    from datetime import timezone
+
     row: dict[str, Any] = {
         "company_id": company_id,
         "slug": slug,
         "title": title,
         "label": label,
+        "labels": [label],
         "source_url": source_url,
         "posted_at": posted_at.isoformat(),
         "page_count": page_count,
         "bse_category": bse_category,
         "bse_subcategory": bse_subcategory,
     }
-    if summary:
-        row["summary"] = summary
+    if ai_headline:
+        row["ai_headline"] = ai_headline
+        row["ai_summary_bullets"] = ai_summary_bullets or []
+        row["ai_summary_generated_at"] = datetime.now(timezone.utc).isoformat()
     res = supabase().table("filings").insert(row).execute()
     if not res.data:
         raise RuntimeError(f"insert_filing returned no row for slug={slug}")
