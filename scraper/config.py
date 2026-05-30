@@ -24,6 +24,11 @@ class Config:
     max_filings_per_run: int
     batch_size_embeddings: int
     log_level: str
+    ocr_enabled: bool
+    ocr_max_pages: int
+    ocr_dpi: int
+    summary_enabled: bool
+    fail_threshold: float
 
 
 def _required(name: str) -> str:
@@ -48,6 +53,11 @@ def get_config() -> Config:
         max_filings_per_run=int(os.environ.get("SCRAPER_MAX_FILINGS_PER_RUN", "200")),
         batch_size_embeddings=int(os.environ.get("SCRAPER_BATCH_SIZE_EMBEDDINGS", "100")),
         log_level=os.environ.get("SCRAPER_LOG_LEVEL", "INFO").upper(),
+        ocr_enabled=os.environ.get("SCRAPER_OCR_ENABLED", "1") not in ("0", "false", "False"),
+        ocr_max_pages=int(os.environ.get("SCRAPER_OCR_MAX_PAGES", "30")),
+        ocr_dpi=int(os.environ.get("SCRAPER_OCR_DPI", "200")),
+        summary_enabled=os.environ.get("SCRAPER_SUMMARY_ENABLED", "1") not in ("0", "false", "False"),
+        fail_threshold=float(os.environ.get("SCRAPER_FAIL_THRESHOLD", "0.20")),
     )
     return _cached
 

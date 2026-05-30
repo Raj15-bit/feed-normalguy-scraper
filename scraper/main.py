@@ -42,6 +42,14 @@ def run(lookback_hours: int = 24) -> int:
             statuses[res.status] += 1
             processed += 1
     log.info("cron complete processed=%d %s", processed, dict(statuses))
+    failed = statuses.get("failed", 0)
+    attempted = processed
+    if attempted >= 5 and (failed / attempted) > cfg.fail_threshold:
+        log.error(
+            "fail-loud: failure rate %.0f%% (%d/%d) exceeds threshold %.0f%%",
+            100 * failed / attempted, failed, attempted, 100 * cfg.fail_threshold,
+        )
+        return 1
     return 0
 
 

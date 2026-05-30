@@ -64,8 +64,10 @@ def download_pdf(url: str, timeout: float = 30.0) -> bytes:
 
 
 def extract_pages(pdf_bytes: bytes) -> Optional[list[PdfPage]]:
-    """Returns per-page text. Returns None if the PDF appears to be image-only
-    (total text length < MIN_TEXT_CHARS). pymupdf imports as `fitz`.
+    """Returns per-page text. When the embedded text layer is too thin
+    (total < MIN_TEXT_CHARS) and OCR is enabled in config, render each page
+    and OCR via Tesseract. Returns None only if both paths produce nothing
+    or the document fails to open. pymupdf imports as `fitz`.
     """
     import fitz  # pymupdf
 
@@ -79,11 +81,57 @@ def extract_pages(pdf_bytes: bytes) -> Optional[list[PdfPage]]:
         for i, page in enumerate(doc, start=1):
             text = page.get_text("text") or ""
             pages.append(PdfPage(page=i, text=text.strip()))
+
+        total = sum(len(p.text) for p in pages)
+        if total >= MIN_TEXT_CHARS:
+            return pages
+
+        from scraper.config import get_config
+        cfg = get_config()
+        if not cfg.ocr_enabled:
+            log.info("skipping scanned/image PDF (%d chars, OCR disabled)", total)
+            return None
+
+        ocr_pages = _ocr_document(doc, max_pages=cfg.ocr_max_pages, dpi=cfg.ocr_dpi)
     finally:
         doc.close()
 
-    total = sum(len(p.text) for p in pages)
-    if total < MIN_TEXT_CHARS:
-        log.info("skipping scanned/image PDF (%d chars total)", total)
+    if ocr_pages is None:
         return None
+    ocr_total = sum(len(p.text) for p in ocr_pages)
+    if ocr_total < MIN_TEXT_CHARS:
+        log.info("OCR produced too little text (%d chars), skipping", ocr_total)
+        return None
+    log.info("OCR recovered %d chars from scanned PDF", ocr_total)
+    return ocr_pages
+
+
+def _ocr_document(doc, *, max_pages: int, dpi: int) -> Optional[list[PdfPage]]:
+    """Render each page to an image and run Tesseract on it. Skips pages
+    beyond max_pages to bound runtime. Returns None on import/binary failure."""
+    try:
+        import io
+        import pytesseract
+        from PIL import Image
+    except Exception as e:
+        log.warning("OCR dependencies missing: %s", e)
+        return None
+
+    pages: list[PdfPage] = []
+    n = min(len(doc), max_pages)
+    zoom = dpi / 72.0
+    import fitz
+    matrix = fitz.Matrix(zoom, zoom)
+    for i in range(n):
+        try:
+            pix = doc[i].get_pixmap(matrix=matrix, alpha=False)
+            img = Image.open(io.BytesIO(pix.tobytes("png")))
+            text = pytesseract.image_to_string(img) or ""
+        except pytesseract.TesseractNotFoundError:
+            log.warning("tesseract binary not installed; OCR aborted")
+            return None
+        except Exception as e:
+            log.warning("OCR failed on page %d: %s", i + 1, e)
+            text = ""
+        pages.append(PdfPage(page=i + 1, text=text.strip()))
     return pages

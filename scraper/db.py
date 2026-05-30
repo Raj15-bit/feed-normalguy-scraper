@@ -78,26 +78,23 @@ def insert_filing(
     page_count: int,
     bse_category: Optional[str] = None,
     bse_subcategory: Optional[str] = None,
+    summary: Optional[str] = None,
 ) -> str:
     """Inserts a filing row and returns its id."""
-    res = (
-        supabase()
-        .table("filings")
-        .insert(
-            {
-                "company_id": company_id,
-                "slug": slug,
-                "title": title,
-                "label": label,
-                "source_url": source_url,
-                "posted_at": posted_at.isoformat(),
-                "page_count": page_count,
-                "bse_category": bse_category,
-                "bse_subcategory": bse_subcategory,
-            }
-        )
-        .execute()
-    )
+    row: dict[str, Any] = {
+        "company_id": company_id,
+        "slug": slug,
+        "title": title,
+        "label": label,
+        "source_url": source_url,
+        "posted_at": posted_at.isoformat(),
+        "page_count": page_count,
+        "bse_category": bse_category,
+        "bse_subcategory": bse_subcategory,
+    }
+    if summary:
+        row["summary"] = summary
+    res = supabase().table("filings").insert(row).execute()
     if not res.data:
         raise RuntimeError(f"insert_filing returned no row for slug={slug}")
     return res.data[0]["id"]
