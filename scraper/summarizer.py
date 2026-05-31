@@ -20,23 +20,30 @@ log = logging.getLogger(__name__)
 
 _client: Optional[OpenAI] = None
 
-# Same excerpt budget the app uses (lib/summarize.ts slices 4000 chars).
-_MAX_INPUT_CHARS = 4_000
+# Same excerpt budget the app uses (lib/summarize.ts slices 12000 chars).
+_MAX_INPUT_CHARS = 12_000
 
-# Verbatim copy of lib/summarize.ts SYSTEM prompt.
+# Verbatim copy of lib/summarize.ts SYSTEM prompt (100-150 word bullet context).
 _SYSTEM = (
-    "You extract facts from Indian listed-company regulatory filings. Return "
-    'STRICT JSON of shape: {"headline": "...", "bullets": ["...", "..."]}.\n\n'
+    "You are a financial news editor summarising an Indian listed-company "
+    "regulatory filing for retail investors. Return STRICT JSON of shape: "
+    '{"headline": "...", "bullets": ["...", "..."]}.\n\n'
     "Rules:\n"
     '- "headline" is ONE line, <= 80 characters, chyron-style. Use absolute '
     "dates and currency.\n"
-    '- "bullets" is 3 to 5 short bullets, TOTAL <= 50 words across all bullets.\n'
+    '- "bullets" is 4 to 7 bullets, TOTAL 100 to 150 words across all bullets. '
+    "Each bullet a complete, specific sentence.\n"
+    "- Explain what is actually happening and why it matters factually: the "
+    "event, the numbers (amounts, %, dates, quarters), named parties, agencies, "
+    "ratings, and any concrete terms in the filing.\n"
+    "- Pull EVERY relevant figure, date, name and term that is present in the "
+    "input text. Be concrete, not generic.\n"
     "- Only facts present in the input text. NO analysis, NO projections, NO "
-    "speculation, NO recommendations.\n"
-    "- If the filing is just a notice without details, give 1-2 bullets "
-    "summarising the notice itself.\n"
-    '- NEVER include phrases like "the company", "we believe", '
-    '"investors should".'
+    "speculation, NO buy/sell recommendations.\n"
+    "- If the input text is thin (only a title/notice), still write the best "
+    "factual summary you can from it; do not invent details.\n"
+    '- NEVER include filler like "we believe", "investors should", or '
+    '"this is important".'
 )
 
 
@@ -64,7 +71,7 @@ def _call(user: str) -> str:
         model="deepseek-chat",
         response_format={"type": "json_object"},
         temperature=0.1,
-        max_tokens=400,
+        max_tokens=800,
         messages=[
             {"role": "system", "content": _SYSTEM},
             {"role": "user", "content": user},
@@ -109,9 +116,9 @@ def summarize(
         str(b).strip()
         for b in bullets_raw
         if isinstance(b, str) and str(b).strip()
-    ][:5]
-    # Trim to keep total under ~50 words (mirror lib/summarize.ts clamp at 55).
-    while len(bullets) > 1 and _word_count(bullets) > 55:
+    ][:7]
+    # Keep total within the 100-150 word target (mirror lib/summarize.ts clamp at 170).
+    while len(bullets) > 1 and _word_count(bullets) > 170:
         bullets.pop()
     if not headline or not bullets:
         return None, None
