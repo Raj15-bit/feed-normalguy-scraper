@@ -23,7 +23,7 @@ _client: Optional[OpenAI] = None
 # Same excerpt budget the app uses (lib/summarize.ts slices 12000 chars).
 _MAX_INPUT_CHARS = 12_000
 
-# Verbatim copy of lib/summarize.ts SYSTEM prompt (100-150 word bullet context).
+# Verbatim copy of lib/summarize.ts SYSTEM prompt (~50 word bullet context).
 _SYSTEM = (
     "You are a financial news editor summarising an Indian listed-company "
     "regulatory filing for retail investors. Return STRICT JSON of shape: "
@@ -31,13 +31,11 @@ _SYSTEM = (
     "Rules:\n"
     '- "headline" is ONE line, <= 80 characters, chyron-style. Use absolute '
     "dates and currency.\n"
-    '- "bullets" is 4 to 7 bullets, TOTAL 100 to 150 words across all bullets. '
-    "Each bullet a complete, specific sentence.\n"
+    '- "bullets" is 2 to 3 bullets, TOTAL about 50 words across all bullets '
+    "(never more than 60). Each bullet a short, specific sentence.\n"
     "- Explain what is actually happening and why it matters factually: the "
-    "event, the numbers (amounts, %, dates, quarters), named parties, agencies, "
-    "ratings, and any concrete terms in the filing.\n"
-    "- Pull EVERY relevant figure, date, name and term that is present in the "
-    "input text. Be concrete, not generic.\n"
+    "event, the key numbers (amounts, %, dates, quarters), named parties, "
+    "agencies, ratings. Keep it tight — only the most important facts.\n"
     "- Only facts present in the input text. NO analysis, NO projections, NO "
     "speculation, NO buy/sell recommendations.\n"
     "- If the input text is thin (only a title/notice), still write the best "
@@ -116,9 +114,9 @@ def summarize(
         str(b).strip()
         for b in bullets_raw
         if isinstance(b, str) and str(b).strip()
-    ][:7]
-    # Keep total within the 100-150 word target (mirror lib/summarize.ts clamp at 170).
-    while len(bullets) > 1 and _word_count(bullets) > 170:
+    ][:3]
+    # Keep total within the ~50-word target (mirror lib/summarize.ts clamp at 60).
+    while len(bullets) > 1 and _word_count(bullets) > 60:
         bullets.pop()
     if not headline or not bullets:
         return None, None
