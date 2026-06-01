@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 from scraper.bse_client import Announcement
 from scraper.chunker import chunk_pages
-from scraper.classifier import classify
+from scraper.classifier import classify_multi
 from scraper.config import get_config
 from scraper.db import (
     Company,
@@ -56,10 +56,14 @@ def process_announcement(
         if pages is None:
             return PipelineResult(status="skipped_scanned")
 
-        label = classify(
+        # Body text reused for both labeling (DeepSeek) and summarisation.
+        body = "\n\n".join(p.text for p in pages if p.text)
+
+        labels, label = classify_multi(
             title=ann.title,
             bse_category=ann.bse_category,
             bse_subcategory=ann.bse_subcategory,
+            body=body,
         )
 
         chunks = chunk_pages(pages)
@@ -72,7 +76,6 @@ def process_announcement(
         ai_bullets: list[str] | None = None
         if get_config().summary_enabled:
             try:
-                body = "\n\n".join(p.text for p in pages if p.text)
                 ai_headline, ai_bullets = summarize(
                     title=ann.title,
                     label=label,
@@ -88,6 +91,7 @@ def process_announcement(
             slug=slug,
             title=ann.title,
             label=label,
+            labels=labels,
             source_url=ann.source_url,
             posted_at=ann.posted_at,
             page_count=len(pages),

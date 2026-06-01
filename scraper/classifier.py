@@ -158,6 +158,100 @@ _DEEPSEEK_SYSTEM = (
     + ". Return JSON like {\"label\": \"<one of the labels>\"}. No prose."
 )
 
+_DEEPSEEK_MULTI_SYSTEM = (
+    "You classify Indian corporate filings into one or more of these fixed labels: "
+    + ", ".join(LABEL_SLUGS)
+    + ". Return strict JSON {\"labels\": [\"...\"]} with 1-3 labels. "
+    + "Use \"other\" only when no specific label fits."
+)
+
+# Primary-label priority (mirrors the app's pickPrimaryLabel). Highest first.
+LABEL_PRIORITY: list[str] = [
+    "concall",
+    "quarterly_results",
+    "credit_rating",
+    "investor_ppt",
+    "annual_report",
+    "order_win",
+    "ma",
+    "fundraising",
+    "capex_expansion",
+    "dividend",
+    "board_meeting",
+    "stock_split_bonus",
+    "directorate_change",
+    "agm_egm",
+    "insider_trading",
+    "shareholding_pattern",
+    "regulatory",
+    "other",
+]
+
+
+def _pick_primary(labels: list[str]) -> str:
+    for p in LABEL_PRIORITY:
+        if p in labels:
+            return p
+    return labels[0] if labels else "other"
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=10), reraise=True)
+def classify_via_llm_multi(
+    title: str, bse_subcategory: Optional[str], body: Optional[str] = None
+) -> list[str]:
+    """DeepSeek multi-label classification (runs for every filing)."""
+    excerpt = (" ".join((body or "").split()))[:600]
+    prompt = (
+        f"Title: {title}\nBSE subcategory: {bse_subcategory or 'n/a'}\n"
+        f"Filing excerpt: {excerpt}\nLabels:"
+    )
+    res = _deepseek_client().chat.completions.create(
+        model="deepseek-chat",
+        response_format={"type": "json_object"},
+        temperature=0,
+        messages=[
+            {"role": "system", "content": _DEEPSEEK_MULTI_SYSTEM},
+            {"role": "user", "content": prompt},
+        ],
+    )
+    content = (res.choices[0].message.content or "").strip()
+    try:
+        parsed = json.loads(content)
+        raw = parsed.get("labels", [])
+        if isinstance(raw, list):
+            return [str(x).strip() for x in raw if str(x).strip() in LABEL_SLUGS]
+    except json.JSONDecodeError:
+        pass
+    log.warning("DeepSeek multi returned unparseable/invalid labels for %r: %r", title, content)
+    return []
+
+
+def classify_multi(
+    title: str,
+    bse_category: Optional[str],
+    bse_subcategory: Optional[str],
+    body: Optional[str] = None,
+) -> tuple[list[str], str]:
+    """Union of mapping + regex + DeepSeek (always run). Returns (labels, primary)."""
+    merged: set[str] = set()
+    m = classify_via_mapping(bse_category, bse_subcategory)
+    if m:
+        merged.add(m)
+    r = classify_via_regex(title)
+    if r:
+        merged.add(r)
+    try:
+        for s in classify_via_llm_multi(title, bse_subcategory, body):
+            merged.add(s)
+    except Exception as e:  # keep rule labels on LLM failure
+        log.warning("classify_via_llm_multi failed for %r: %s", title, e)
+    if len(merged) > 1:
+        merged.discard("other")
+    if not merged:
+        merged.add("other")
+    labels = list(merged)[:4]
+    return labels, _pick_primary(labels)
+
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=10), reraise=True)
 def classify_via_llm(title: str, bse_subcategory: Optional[str]) -> str:
