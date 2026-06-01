@@ -1,0 +1,49 @@
+name: transcripts
+
+# Surfaces real earnings-call TRANSCRIPTS into the Concalls section:
+#   1) backfill: fetch concall filings (incl. oddly-titled transcripts) for the
+#      last ~4 quarters across all companies.
+#   2) retitle: re-scan existing concall rows and re-title the ones whose
+#      attached PDF is actually a transcript (e.g. filed as "Con. Call Updates").
+# Runs weekly and on demand.
+
+on:
+  schedule:
+    # Sunday 02:30 UTC (08:00 IST) — quiet window.
+    - cron: "30 2 * * 0"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Backfill window in days (last 4 quarters ≈ 400)"
+        required: false
+        default: "400"
+
+concurrency:
+  group: transcripts
+  cancel-in-progress: false
+
+jobs:
+  transcripts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install tesseract (OCR fallback for scanned PDFs)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr
+      - run: pip install -r requirements.txt
+      - name: Fetch concall transcripts (last 4 quarters)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: python -m scraper.backfill --days ${{ github.event.inputs.days || '400' }} --doc-types concall
+      - name: Re-title hidden transcripts already in the DB
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: python -m scraper.retitle_transcripts

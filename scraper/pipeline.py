@@ -31,6 +31,10 @@ from scraper.db import (
 from scraper.embedder import embed_all
 from scraper.pdf_extract import download_pdf, extract_pages
 from scraper.summarizer import summarize
+from scraper.transcript_detect import (
+    looks_like_transcript,
+    normalize_transcript_title,
+)
 
 log = logging.getLogger(__name__)
 
@@ -67,6 +71,19 @@ def process_announcement(
             body=body,
         )
 
+        # Transcript detection (title OR body). A transcript is always a concall
+        # and must land in the Concalls section, so we force the concall label
+        # and normalise the title to carry "Transcript" — even when the filing
+        # was posted under a generic "Con. Call Updates" notice with the
+        # transcript attached. Non-transcript concall notices are left untouched
+        # (they stay out of the Concall section, in "Other").
+        store_title = ann.title
+        if looks_like_transcript(ann.title, body):
+            if "concall" not in labels:
+                labels = (["concall"] + labels)[:4]
+            label = "concall"
+            store_title = normalize_transcript_title(ann.title)
+
         chunks = chunk_pages(pages)
         if not chunks:
             return PipelineResult(status="skipped_scanned")
@@ -90,7 +107,7 @@ def process_announcement(
         filing_id = insert_filing(
             company_id=company.id,
             slug=slug,
-            title=ann.title,
+            title=store_title,
             label=label,
             labels=labels,
             source_url=ann.source_url,

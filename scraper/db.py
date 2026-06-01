@@ -147,6 +147,48 @@ def upsert_content_cache(
         log.warning("upsert_content_cache failed for %s: %s", source_url, e)
 
 
+def fetch_concall_candidates(
+    *, limit: int, offset: int
+) -> list[dict[str, Any]]:
+    """Filings that carry the 'concall' label (primary or secondary) — the pool
+    the re-titling pass scans for hidden transcripts. Newest first, paginated."""
+    res = (
+        supabase()
+        .table("filings")
+        .select("id,title,label,labels,source_url,company_id")
+        .contains("labels", ["concall"])
+        .order("posted_at", desc=True)
+        .range(offset, offset + limit - 1)
+        .execute()
+    )
+    return res.data or []
+
+
+def get_cached_text(source_url: str) -> Optional[str]:
+    """The extracted text we pre-warmed in filing_content_cache, if present."""
+    res = (
+        supabase()
+        .table("filing_content_cache")
+        .select("extracted_text")
+        .eq("source_url", source_url)
+        .limit(1)
+        .execute()
+    )
+    if res.data:
+        return res.data[0].get("extracted_text")
+    return None
+
+
+def update_filing_label_title(
+    *, filing_id: str, title: str, label: str, labels: list[str]
+) -> None:
+    """Re-title + re-label an existing filing (used to surface a hidden
+    transcript into the Concalls section)."""
+    supabase().table("filings").update(
+        {"title": title, "label": label, "labels": labels}
+    ).eq("id", filing_id).execute()
+
+
 def insert_chunks(
     *,
     filing_id: str,
