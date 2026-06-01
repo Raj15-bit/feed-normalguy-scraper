@@ -50,26 +50,27 @@ def _client() -> httpx.Client:
     return httpx.Client(headers=_DEFAULT_HEADERS, timeout=httpx.Timeout(20.0))
 
 
+# BSE truncates a single AnnGetData response, so a long backfill window must be
+# fetched in smaller sub-windows and merged. ~45 days keeps each response small.
+_CHUNK_DAYS = 45
+
+
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
     retry=retry_if_exception_type(httpx.HTTPError),
     reraise=True,
 )
-def fetch_announcements(
-    bse_code: str,
-    *,
-    since: Optional[datetime] = None,
+def _fetch_window(
+    bse_code: str, win_from: datetime, win_to: datetime
 ) -> list[Announcement]:
-    """Return BSE announcements for one scrip, filtered to >= `since`."""
-    since = since or (datetime.now(timezone.utc) - timedelta(days=2))
-    to_date = datetime.now(timezone.utc)
+    """One BSE call for a single [win_from, win_to] date window."""
     params = {
         "strCat": "-1",
-        "strPrevDate": since.strftime("%Y%m%d"),
+        "strPrevDate": win_from.strftime("%Y%m%d"),
         "strScrip": bse_code,
         "strSearch": "P",
-        "strToDate": to_date.strftime("%Y%m%d"),
+        "strToDate": win_to.strftime("%Y%m%d"),
         "strType": "C",
     }
     with _client() as c:
@@ -80,8 +81,44 @@ def fetch_announcements(
     out: list[Announcement] = []
     for row in rows:
         ann = _to_announcement(bse_code, row)
-        if ann and ann.posted_at >= since:
+        if ann:
             out.append(ann)
+    return out
+
+
+def fetch_announcements(
+    bse_code: str,
+    *,
+    since: Optional[datetime] = None,
+) -> list[Announcement]:
+    """Return BSE announcements for one scrip since `since`, fetched in
+    ~45-day windows (so BSE can't silently truncate a long backfill) and
+    de-duplicated by source_url."""
+    since = since or (datetime.now(timezone.utc) - timedelta(days=2))
+    to_date = datetime.now(timezone.utc)
+
+    seen: set[str] = set()
+    out: list[Announcement] = []
+    win_from = since
+    while win_from < to_date:
+        win_to = min(win_from + timedelta(days=_CHUNK_DAYS), to_date)
+        try:
+            for ann in _fetch_window(bse_code, win_from, win_to):
+                if ann.posted_at < since:
+                    continue
+                if ann.source_url in seen:
+                    continue
+                seen.add(ann.source_url)
+                out.append(ann)
+        except Exception as e:  # one bad window shouldn't kill the whole range
+            log.warning(
+                "BSE window %s..%s failed for %s: %s",
+                win_from.date(),
+                win_to.date(),
+                bse_code,
+                e,
+            )
+        win_from = win_to
     return out
 
 

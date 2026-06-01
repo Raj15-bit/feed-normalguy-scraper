@@ -13,6 +13,10 @@ on:
         description: "Optional: limit to one company slug (e.g. reliance)"
         required: false
         type: string
+      doc_types:
+        description: "Optional CSV of label slugs to focus on (e.g. concall,investor_ppt,credit_rating,annual_report)"
+        required: false
+        type: string
 
 jobs:
   backfill:
@@ -37,5 +41,8 @@ jobs:
           ARGS="--days ${{ github.event.inputs.days }}"
           if [ -n "${{ github.event.inputs.company_slug }}" ]; then
             ARGS="$ARGS --company-slug ${{ github.event.inputs.company_slug }}"
+          fi
+          if [ -n "${{ github.event.inputs.doc_types }}" ]; then
+            ARGS="$ARGS --doc-types ${{ github.event.inputs.doc_types }}"
           fi
           python -m scraper.backfill $ARGS
