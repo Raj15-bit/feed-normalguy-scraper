@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 from scraper.bse_client import Announcement
 from scraper.chunker import chunk_pages
-from scraper.classifier import classify_multi
+from scraper.classifier import classify_multi, _pick_primary
 from scraper.config import get_config
 from scraper.db import (
     Company,
@@ -83,6 +83,13 @@ def process_announcement(
                 labels = (["concall"] + labels)[:4]
             label = "concall"
             store_title = normalize_transcript_title(ann.title)
+        elif "concall" in labels:
+            # DEMOTE: a non-transcript notice ("Con. Call Updates", analyst-meet
+            # intimation, "attend conference") must NOT carry the concall label.
+            # The Concalls surface is transcripts-only. Drop concall and fall
+            # back to the next-best label (or 'other').
+            labels = [l for l in labels if l != "concall"] or ["other"]
+            label = _pick_primary(labels)
 
         chunks = chunk_pages(pages)
         if not chunks:

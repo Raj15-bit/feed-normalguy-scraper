@@ -189,6 +189,26 @@ def update_filing_label_title(
     ).eq("id", filing_id).execute()
 
 
+def fetch_filings_page(*, limit: int, offset: int) -> list[dict[str, Any]]:
+    """All filings, newest first, paginated — for the global de-dup scan."""
+    res = (
+        supabase()
+        .table("filings")
+        .select("id,company_id,title,label,labels,source_url,posted_at")
+        .order("posted_at", desc=True)
+        .order("id", desc=True)
+        .range(offset, offset + limit - 1)
+        .execute()
+    )
+    return res.data or []
+
+
+def delete_filing(filing_id: str) -> None:
+    """Delete a filing and its chunks (chunks first, in case no FK cascade)."""
+    supabase().table("filing_chunks").delete().eq("filing_id", filing_id).execute()
+    supabase().table("filings").delete().eq("id", filing_id).execute()
+
+
 def insert_chunks(
     *,
     filing_id: str,

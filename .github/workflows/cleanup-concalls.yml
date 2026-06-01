@@ -1,0 +1,51 @@
+name: cleanup-concalls
+
+# One-shot maintenance: make the `concall` label = real transcripts only
+# (demote "Con. Call Updates"/analyst-meet notices) and de-duplicate filings.
+# Default run is a DRY-RUN (reports only). Set apply=true to commit.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Commit changes (demote + delete dups). false = dry-run report only."
+        required: false
+        default: "false"
+      dedup:
+        description: "Also run the global de-dup phase."
+        required: false
+        default: "true"
+      download:
+        description: "Fetch live PDFs for rows with no cached text."
+        required: false
+        default: "true"
+
+concurrency:
+  group: cleanup-concalls
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install tesseract (OCR fallback for scanned PDFs)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr
+      - run: pip install -r requirements.txt
+      - name: Clean concalls (relabel + dedup)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          ARGS=""
+          if [ "${{ github.event.inputs.apply }}" == "true" ]; then ARGS="$ARGS --apply"; fi
+          if [ "${{ github.event.inputs.dedup }}" != "true" ]; then ARGS="$ARGS --no-dedup"; fi
+          if [ "${{ github.event.inputs.download }}" != "true" ]; then ARGS="$ARGS --no-download"; fi
+          echo "Running: python -m scraper.clean_concalls $ARGS"
+          python -m scraper.clean_concalls $ARGS
