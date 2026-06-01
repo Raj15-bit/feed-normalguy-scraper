@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import sys
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -17,6 +18,30 @@ from scraper.pipeline import process_announcement
 from scraper.sources import fetch_all_for
 
 log = logging.getLogger("scraper.backfill")
+
+# Title keyword patterns per target doc type — used so an oddly-titled real
+# document (e.g. a transcript whose title the label-guess misses) still passes
+# the doc-type pre-filter.
+_TITLE_KEYWORDS: dict[str, re.Pattern[str]] = {
+    "concall": re.compile(
+        r"transcript|audio[\s-]*recording|earnings call|conference call|concall|investor call|analyst call|investor/?analyst meet|investor meet",
+        re.I,
+    ),
+    "investor_ppt": re.compile(r"presentation", re.I),
+    "credit_rating": re.compile(
+        r"\brating\b|crisil|icra|care ratings|care edge|moody|fitch|ind-?ra|s&p|s & p",
+        re.I,
+    ),
+    "annual_report": re.compile(r"annual report", re.I),
+}
+
+
+def _title_hits(title: str, doc_types: set[str]) -> bool:
+    for dt in doc_types:
+        pat = _TITLE_KEYWORDS.get(dt)
+        if pat and pat.search(title or ""):
+            return True
+    return False
 
 
 def run(
@@ -49,11 +74,13 @@ def run(
                 log.info("max_filings_per_run reached, stopping")
                 break
             # Cheap pre-filter (no download/LLM) when focusing on doc types.
+            # Keep if the label-guess matches OR the title positively mentions a
+            # target doc (catches oddly-titled transcripts/presentations/etc.).
             if doc_types is not None:
                 guess = classify_via_mapping(
                     ann.bse_category, ann.bse_subcategory
                 ) or classify_via_regex(ann.title)
-                if guess not in doc_types:
+                if guess not in doc_types and not _title_hits(ann.title, doc_types):
                     statuses["skipped_filtered"] += 1
                     continue
             res = process_announcement(company=company, ann=ann)
