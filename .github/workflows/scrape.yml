@@ -2,10 +2,12 @@ name: scrape
 
 on:
   schedule:
-    # Every 2 hours during IST market hours (UTC+5:30).
+    # Every 2 hours during IST market hours (UTC+5:30) on weekdays.
     # NSE/BSE open ~09:15 IST (03:45 UTC), close ~15:30 IST (10:00 UTC).
-    # Plus a nightly catch-up at 22:00 IST (16:30 UTC) for after-hours filings.
-    - cron: "0 4,6,8,10,16 * * 1-5"
+    - cron: "0 4,6,8,10 * * 1-5"
+    # Nightly catch-up at 22:00 IST (16:30 UTC) EVERY day (incl. weekends) so
+    # weekend/after-hours filings are never missed.
+    - cron: "0 16 * * *"
   workflow_dispatch:
 
 concurrency:

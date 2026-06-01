@@ -114,6 +114,39 @@ def insert_filing(
     return res.data[0]["id"]
 
 
+def upsert_content_cache(
+    *,
+    source_url: str,
+    extracted_text: str,
+    content_type: str = "pdf",
+    fetch_method: str = "pdf-parse",
+) -> None:
+    """Pre-warm the app's filing_content_cache (migration 0008) with the text we
+    already extracted during scraping. The AI chat reads this table by
+    source_url, so pre-seeding it means chats never wait on a live PDF download.
+
+    Keyed on source_url (unique). We refresh on conflict so a re-scrape with
+    better text wins. Best-effort: never raises into the pipeline.
+    """
+    text = (extracted_text or "").strip()
+    if len(text) < 100:
+        return
+    try:
+        supabase().table("filing_content_cache").upsert(
+            {
+                "source_url": source_url,
+                "content_type": content_type,
+                "fetch_method": fetch_method,
+                "extracted_text": text,
+                "char_count": len(text),
+                "fetch_error": None,
+            },
+            on_conflict="source_url",
+        ).execute()
+    except Exception as e:  # noqa: BLE001 — cache is best-effort
+        log.warning("upsert_content_cache failed for %s: %s", source_url, e)
+
+
 def insert_chunks(
     *,
     filing_id: str,

@@ -1,0 +1,54 @@
+name: repair-links
+
+# Daily broken-link auto-repair. Walks the app's /api/admin/repair-links
+# endpoint page by page (AttachLive↔AttachHis fallback + stale-cache purge)
+# until every filing has been checked. Keeps the AI chat / PDF viewer from ever
+# hitting a dead BSE link.
+
+on:
+  schedule:
+    # 01:30 UTC = 07:00 IST daily — after the overnight catch-up scrape.
+    - cron: "30 1 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: repair-links
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Walk repair-links until done
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_URL:-}" ] || [ -z "${CRON_SECRET:-}" ]; then
+            echo "APP_URL and CRON_SECRET secrets must be set"; exit 1
+          fi
+          base="${APP_URL%/}/api/admin/repair-links"
+          cursor=""
+          total_fixed=0
+          total_checked=0
+          for i in $(seq 1 200); do
+            if [ -z "$cursor" ]; then
+              payload='{"limit":60}'
+            else
+              payload=$(printf '{"limit":60,"cursor":"%s"}' "$cursor")
+            fi
+            resp=$(curl -sS --max-time 75 -X POST "$base" \
+              -H "Authorization: Bearer ${CRON_SECRET}" \
+              -H "Content-Type: application/json" \
+              -d "$payload")
+            echo "batch $i: $resp"
+            checked=$(echo "$resp" | jq -r '.checked // 0')
+            fixed=$(echo "$resp" | jq -r '.fixed // 0')
+            total_checked=$((total_checked + checked))
+            total_fixed=$((total_fixed + fixed))
+            cursor=$(echo "$resp" | jq -r '.nextCursor // empty')
+            if [ -z "$cursor" ]; then break; fi
+          done
+          echo "Done. checked=$total_checked fixed=$total_fixed"

@@ -26,6 +26,7 @@ from scraper.db import (
     insert_chunks,
     insert_filing,
     queue_alerts,
+    upsert_content_cache,
 )
 from scraper.embedder import embed_all
 from scraper.pdf_extract import download_pdf, extract_pages
@@ -108,6 +109,10 @@ def process_announcement(
                 for c, emb in zip(chunks, embeddings)
             ],
         )
+        # Pre-warm the app's content cache so the AI chat reads instantly
+        # (no live PDF download at chat time). Best-effort.
+        upsert_content_cache(source_url=ann.source_url, extracted_text=body)
+
         alerts = 0
         try:
             alerts = queue_alerts(filing_id)
