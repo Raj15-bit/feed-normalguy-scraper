@@ -71,14 +71,14 @@ def _quarter_label(title: str, iso: str) -> str:
             fy += 2000
         return f"Q{q} FY{fy % 100}"
     d = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-    mo, y = d.month, d.year
-    if mo <= 2:
+    mo, y = d.month, d.year  # NOTE: Python month is 1-indexed (Jan=1..Dec=12).
+    if mo <= 3:  # Jan–Mar → Q4 of the FY ending this March
         fy, q = y, 4
-    elif mo <= 5:
+    elif mo <= 6:  # Apr–Jun → Q1
         fy, q = y + 1, 1
-    elif mo <= 8:
+    elif mo <= 9:  # Jul–Sep → Q2
         fy, q = y + 1, 2
-    else:
+    else:  # Oct–Dec → Q3
         fy, q = y + 1, 3
     return f"Q{q} FY{fy % 100}"
 
@@ -88,8 +88,9 @@ def company_gaps(company) -> dict:
     rows = fetch_company_docrows(
         company_id=company.id, labels=DOC_TYPES, since_iso=FY_START_ISO
     )
-    # present[type][quarter] = source_url of a real doc (for broken-link check)
-    present: dict[str, dict[str, str]] = {t: {} for t in DOC_TYPES}
+    # present[type][quarter] = list of real-doc source_urls (broken-link check
+    # considers a cell healthy if ANY copy is fetchable).
+    present: dict[str, dict[str, list[str]]] = {t: {} for t in DOC_TYPES}
     mislabelled = 0
     for r in rows:
         label = r.get("label") or ""
@@ -100,15 +101,15 @@ def company_gaps(company) -> dict:
             mislabelled += 1  # L3: labelled the type but not the real doc
             continue
         q = "FY26" if label == "annual_report" else _quarter_label(title, r["posted_at"])
-        present[label].setdefault(q, r.get("source_url") or "")
+        present[label].setdefault(q, []).append(r.get("source_url") or "")
 
     missing: list[dict] = []
     for t in ("concall", "investor_ppt", "credit_rating"):
         for q in TARGET_QUARTERS:
-            url = present[t].get(q)
-            if not url:
+            urls = present[t].get(q) or []
+            if not urls:
                 missing.append({"type": t, "quarter": q, "reason": "absent"})
-            elif not cache_is_healthy(url):
+            elif not any(cache_is_healthy(u) for u in urls if u):
                 missing.append({"type": t, "quarter": q, "reason": "broken"})
     if not present["annual_report"]:
         missing.append({"type": "annual_report", "quarter": "FY26", "reason": "absent"})
@@ -128,8 +129,16 @@ def _select_slice(companies: list, spec: str | None) -> list:
     if spec == "auto":
         idx = (datetime.now(timezone.utc).hour // 6) % n_slices
     else:
-        a, b = spec.split("/")
-        idx, n_slices = int(a) - 1, int(b)
+        parts = spec.split("/")
+        if len(parts) != 2:
+            raise SystemExit(f"--slice must be 'auto' or 'i/N', got {spec!r}")
+        try:
+            i, n_slices = int(parts[0]), int(parts[1])
+        except ValueError:
+            raise SystemExit(f"--slice i/N must be integers, got {spec!r}")
+        if n_slices < 1 or not (1 <= i <= n_slices):
+            raise SystemExit(f"--slice out of range: need 1<=i<=N, got {spec!r}")
+        idx = i - 1
     out = [c for i, c in enumerate(companies) if i % n_slices == idx]
     log.info("slice %s → %d/%d companies", spec, len(out), len(companies))
     return out
