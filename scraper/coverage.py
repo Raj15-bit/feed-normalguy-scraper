@@ -70,16 +70,23 @@ def _quarter_label(title: str, iso: str) -> str:
         if fy < 100:
             fy += 2000
         return f"Q{q} FY{fy % 100}"
+    # Map POSTED month → the fiscal quarter it REPORTS (calls land ~3-6 weeks
+    # after quarter-end). Python month is 1-indexed (Jan=1..Dec=12).
+    # MUST stay IN LOCK-STEP with app lib/fy.ts `fyQuarterFromDate`.
+    #   Apr-May → Q4 (FY ending this Mar) · Jun-Aug → Q1 (new FY) ·
+    #   Sep-Nov → Q2 · Dec → Q3 (new FY) · Jan-Mar → Q3 (FY ending this Mar).
     d = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-    mo, y = d.month, d.year  # NOTE: Python month is 1-indexed (Jan=1..Dec=12).
-    if mo <= 3:  # Jan–Mar → Q4 of the FY ending this March
+    mo, y = d.month, d.year
+    if mo in (4, 5):
         fy, q = y, 4
-    elif mo <= 6:  # Apr–Jun → Q1
+    elif mo in (6, 7, 8):
         fy, q = y + 1, 1
-    elif mo <= 9:  # Jul–Sep → Q2
+    elif mo in (9, 10, 11):
         fy, q = y + 1, 2
-    else:  # Oct–Dec → Q3
+    elif mo == 12:
         fy, q = y + 1, 3
+    else:  # Jan, Feb, Mar
+        fy, q = y, 3
     return f"Q{q} FY{fy % 100}"
 
 
