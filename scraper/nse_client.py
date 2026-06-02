@@ -88,9 +88,18 @@ def fetch_announcements(
     except (httpx.HTTPError, ValueError) as e:
         log.warning("NSE fetch failed for %s: %s", nse_symbol, e)
         return []
-    rows = data if isinstance(data, list) else (data.get("data") or [])
+    if isinstance(data, list):
+        rows = data
+    elif isinstance(data, dict):
+        rows = data.get("data") or []
+    else:
+        rows = []
+    if not isinstance(rows, list):
+        rows = []
     out: list[Announcement] = []
     for row in rows:
+        if not isinstance(row, dict):
+            continue
         ann = _to_announcement(nse_symbol, row)
         if ann and ann.posted_at >= since:
             out.append(ann)
@@ -98,6 +107,8 @@ def fetch_announcements(
 
 
 def _to_announcement(nse_symbol: str, raw: dict[str, Any]) -> Optional[Announcement]:
+    if not isinstance(raw, dict):
+        return None
     title = raw.get("desc") or raw.get("subject") or raw.get("attchmntText")
     if not title:
         return None

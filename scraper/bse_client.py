@@ -77,9 +77,18 @@ def _fetch_window(
         r = c.get(BSE_ANN_URL, params=params)
         r.raise_for_status()
         data = r.json()
+    # BSE can return a bare string / unexpected shape on some windows — guard
+    # every layer so a single odd payload doesn't crash the window
+    # ("'str' object has no attribute 'get'").
+    if not isinstance(data, dict):
+        return []
     rows = data.get("Table") or data.get("data") or []
+    if not isinstance(rows, list):
+        return []
     out: list[Announcement] = []
     for row in rows:
+        if not isinstance(row, dict):
+            continue
         ann = _to_announcement(bse_code, row)
         if ann:
             out.append(ann)
@@ -123,6 +132,8 @@ def fetch_announcements(
 
 
 def _to_announcement(bse_code: str, raw: dict[str, Any]) -> Optional[Announcement]:
+    if not isinstance(raw, dict):
+        return None
     title = (
         raw.get("HEADLINE")
         or raw.get("NEWSSUB")
