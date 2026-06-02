@@ -1,0 +1,45 @@
+name: retry-failed-fetch
+
+# Hourly: re-fetch filings whose content cache is missing/empty/failed, so the
+# DeepSeek chat always reads real text (no dead/empty sources). Auto-patch only —
+# remaining failures are visible via /api/admin/health (no email).
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: retry-failed-fetch
+  cancel-in-progress: false
+
+jobs:
+  retry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Walk retry-fetches until done
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_URL:-}" ] || [ -z "${CRON_SECRET:-}" ]; then
+            echo "APP_URL and CRON_SECRET secrets must be set"; exit 1
+          fi
+          base="${APP_URL%/}/api/admin/retry-fetches"
+          cursor=""
+          healed=0
+          # Cap iterations so a single hourly run stays bounded.
+          for i in $(seq 1 120); do
+            if [ -z "$cursor" ]; then payload='{"limit":15}';
+            else payload=$(printf '{"limit":15,"cursor":"%s"}' "$cursor"); fi
+            resp=$(curl -sS --max-time 75 -X POST "$base" \
+              -H "Authorization: Bearer ${CRON_SECRET}" \
+              -H "Content-Type: application/json" -d "$payload")
+            echo "batch $i: $resp"
+            healed=$((healed + $(echo "$resp" | jq -r '.healed // 0')))
+            cursor=$(echo "$resp" | jq -r '.nextCursor // empty')
+            if [ -z "$cursor" ]; then break; fi
+          done
+          echo "Done. healed=$healed"

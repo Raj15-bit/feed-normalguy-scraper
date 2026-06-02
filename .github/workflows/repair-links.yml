@@ -7,8 +7,8 @@ name: repair-links
 
 on:
   schedule:
-    # 01:30 UTC = 07:00 IST daily — after the overnight catch-up scrape.
-    - cron: "30 1 * * *"
+    # Every 2 hours — keep BSE AttachLive↔AttachHis links healed for the chat.
+    - cron: "0 */2 * * *"
   workflow_dispatch:
 
 concurrency:
