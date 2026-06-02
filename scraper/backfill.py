@@ -51,6 +51,7 @@ def run(
     days: int,
     company_slug: str | None = None,
     doc_types: set[str] | None = None,
+    slice_spec: str | None = None,
 ) -> int:
     setup_logging()
     cfg = get_config()
@@ -58,6 +59,19 @@ def run(
     companies = list_companies(only_with_bse=False)
     if company_slug:
         companies = [c for c in companies if c.slug == company_slug]
+    elif slice_spec:
+        # "i/N" → process every Nth company (shard i of N) so the full universe
+        # can run as N small PARALLEL jobs (avoids the per-job timeout).
+        parts = slice_spec.split("/")
+        if len(parts) != 2:
+            raise SystemExit(f"--slice must be 'i/N', got {slice_spec!r}")
+        try:
+            i, n = int(parts[0]), int(parts[1])
+        except ValueError:
+            raise SystemExit(f"--slice i/N must be integers, got {slice_spec!r}")
+        if n < 1 or not (1 <= i <= n):
+            raise SystemExit(f"--slice out of range: need 1<=i<=N, got {slice_spec!r}")
+        companies = [c for k, c in enumerate(companies) if k % n == (i - 1)]
     log.info(
         "backfill since=%s companies=%d max_per_run=%d doc_types=%s",
         since.date().isoformat(),
@@ -112,13 +126,25 @@ def main() -> int:
         default=None,
         help="CSV of label slugs to focus on, e.g. concall,investor_ppt,credit_rating,annual_report",
     )
+    p.add_argument(
+        "--slice",
+        dest="slice_spec",
+        type=str,
+        default=None,
+        help="Process shard i of N companies, e.g. 2/5 (for parallel jobs)",
+    )
     args = p.parse_args()
     doc_types = (
         {s.strip() for s in args.doc_types.split(",") if s.strip()}
         if args.doc_types
         else None
     )
-    return run(days=args.days, company_slug=args.company_slug, doc_types=doc_types)
+    return run(
+        days=args.days,
+        company_slug=args.company_slug,
+        doc_types=doc_types,
+        slice_spec=args.slice_spec,
+    )
 
 
 if __name__ == "__main__":

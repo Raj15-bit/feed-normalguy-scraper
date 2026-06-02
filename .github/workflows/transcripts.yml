@@ -1,10 +1,11 @@
 name: transcripts
 
 # Fills the company "Documents" view for the last ~4 quarters across all 50:
-#   1) backfill: fetch concall transcripts + investor presentations + annual
-#      reports (incl. oddly-titled ones) over the FY window.
-#   2) retitle: re-scan existing concall rows and re-title the ones whose
-#      attached PDF is actually a transcript (e.g. filed as "Con. Call Updates").
+#   1) backfill (PARALLEL, 5 shards): transcripts + investor presentations +
+#      annual reports over the FY window. Sharded so no single job hits the
+#      per-job time limit.
+#   2) retitle: after all shards, re-scan concall rows and re-title the ones
+#      whose attached PDF is actually a transcript (e.g. "Con. Call Updates").
 # Runs weekly and on demand.
 
 on:
@@ -23,9 +24,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  transcripts:
+  backfill:
+    # 5 parallel shards of ~10 companies each — each finishes well under the
+    # job time limit. fail-fast off so one slow shard can't cancel the rest.
+    strategy:
+      fail-fast: false
+      matrix:
+        slice: [1, 2, 3, 4, 5]
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -35,13 +42,28 @@ jobs:
       - name: Install tesseract (OCR fallback for scanned PDFs)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr
       - run: pip install -r requirements.txt
-      - name: Fetch transcripts + investor PPTs + annual reports (last 4 quarters)
+      - name: Backfill shard ${{ matrix.slice }}/5 (transcripts + PPTs + annual reports)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           SCRAPER_MAX_FILINGS_PER_RUN: "10000"
-        run: python -m scraper.backfill --days ${{ github.event.inputs.days || '400' }} --doc-types concall,investor_ppt,annual_report
+        run: python -m scraper.backfill --days ${{ github.event.inputs.days || '400' }} --doc-types concall,investor_ppt,annual_report --slice ${{ matrix.slice }}/5
+
+  retitle:
+    needs: backfill
+    if: always() # run even if a shard failed, to surface what did land
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install tesseract
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr
+      - run: pip install -r requirements.txt
       - name: Re-title hidden transcripts already in the DB
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
