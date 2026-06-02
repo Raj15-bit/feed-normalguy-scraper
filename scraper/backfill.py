@@ -27,7 +27,10 @@ _TITLE_KEYWORDS: dict[str, re.Pattern[str]] = {
         r"transcript|audio[\s-]*recording|earnings call|conference call|concall|investor call|analyst call|investor/?analyst meet|investor meet",
         re.I,
     ),
-    "investor_ppt": re.compile(r"presentation", re.I),
+    "investor_ppt": re.compile(
+        r"presentation|investor\s+update|earnings\s+update|investor\s+day|analyst\s+day|investor\s+deck|earnings\s+deck",
+        re.I,
+    ),
     "credit_rating": re.compile(
         r"\brating\b|crisil|icra|care ratings|care edge|moody|fitch|ind-?ra|s&p|s & p",
         re.I,
