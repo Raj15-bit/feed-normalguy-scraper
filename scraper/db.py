@@ -203,6 +203,40 @@ def fetch_filings_page(*, limit: int, offset: int) -> list[dict[str, Any]]:
     return res.data or []
 
 
+def fetch_company_docrows(
+    *, company_id: str, labels: list[str], since_iso: str
+) -> list[dict[str, Any]]:
+    """Real-doc rows for a company since a date — input to the coverage matrix."""
+    res = (
+        supabase()
+        .table("filings")
+        .select("id,title,label,labels,source_url,posted_at")
+        .eq("company_id", company_id)
+        .in_("label", labels)
+        .gte("posted_at", since_iso)
+        .order("posted_at", desc=True)
+        .limit(400)
+        .execute()
+    )
+    return res.data or []
+
+
+def cache_is_healthy(source_url: str) -> bool:
+    """True if filing_content_cache has real extracted text (>=100 chars, no error)."""
+    res = (
+        supabase()
+        .table("filing_content_cache")
+        .select("char_count,fetch_error")
+        .eq("source_url", source_url)
+        .limit(1)
+        .execute()
+    )
+    if not res.data:
+        return False
+    row = res.data[0]
+    return (row.get("char_count") or 0) >= 100 and not row.get("fetch_error")
+
+
 def delete_filing(filing_id: str) -> None:
     """Delete a filing and its chunks (chunks first, in case no FK cascade)."""
     supabase().table("filing_chunks").delete().eq("filing_id", filing_id).execute()

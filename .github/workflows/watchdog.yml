@@ -1,0 +1,54 @@
+name: watchdog
+
+# The problem-solver. Staggered between coverage runs. Small sequential steps:
+# health → heal failed fetches → repair broken links → coverage report. Auto-
+# patches; remaining issues are visible in the log (no email).
+
+on:
+  schedule:
+    - cron: "0 3,9,15,21 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: watchdog
+  cancel-in-progress: false
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Health + auto-heal + coverage report
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          set -uo pipefail
+          base="${APP_URL%/}"
+          echo "== health (before) =="; curl -sS --max-time 30 "$base/api/admin/health" -H "Authorization: Bearer $CRON_SECRET" || true
+          echo; echo "== heal failed fetches (3 batches) =="
+          cur=""
+          for i in 1 2 3; do
+            if [ -z "$cur" ]; then p='{"limit":15}'; else p=$(printf '{"limit":15,"cursor":"%s"}' "$cur"); fi
+            r=$(curl -sS --max-time 75 -X POST "$base/api/admin/retry-fetches" -H "Authorization: Bearer $CRON_SECRET" -H "Content-Type: application/json" -d "$p")
+            echo "$r"; cur=$(echo "$r" | jq -r '.nextCursor // empty'); [ -z "$cur" ] && break
+          done
+          echo "== repair links (3 batches) =="
+          cur=""
+          for i in 1 2 3; do
+            if [ -z "$cur" ]; then p='{"limit":60}'; else p=$(printf '{"limit":60,"cursor":"%s"}' "$cur"); fi
+            r=$(curl -sS --max-time 75 -X POST "$base/api/admin/repair-links" -H "Authorization: Bearer $CRON_SECRET" -H "Content-Type: application/json" -d "$p")
+            echo "$r"; cur=$(echo "$r" | jq -r '.nextCursor // empty'); [ -z "$cur" ] && break
+          done
+          echo "== coverage report (slice auto) =="
+          python -m scraper.coverage --report --slice auto || true
+          echo "== health (after) =="; curl -sS --max-time 30 "$base/api/admin/health" -H "Authorization: Bearer $CRON_SECRET" || true
