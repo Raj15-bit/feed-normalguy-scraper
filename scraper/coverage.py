@@ -27,7 +27,11 @@ import logging
 import re
 import sys
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+# Indian Standard Time (UTC+5:30) — filings post in IST; read date parts in IST
+# so quarter/FY match the app (lib/fy.ts) near midnight boundaries.
+_IST = timezone(timedelta(hours=5, minutes=30))
 
 from scraper.backfill import run as backfill_run
 from scraper.config import get_config, setup_logging
@@ -75,7 +79,7 @@ def _quarter_label(title: str, iso: str) -> str:
     # MUST stay IN LOCK-STEP with app lib/fy.ts `fyQuarterFromDate`.
     #   Apr-May → Q4 (FY ending this Mar) · Jun-Aug → Q1 (new FY) ·
     #   Sep-Nov → Q2 · Dec → Q3 (new FY) · Jan-Mar → Q3 (FY ending this Mar).
-    d = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    d = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(_IST)
     mo, y = d.month, d.year
     if mo in (4, 5):
         fy, q = y, 4
