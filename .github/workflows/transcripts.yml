@@ -64,6 +64,12 @@ jobs:
       - name: Install tesseract
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr
       - run: pip install -r requirements.txt
+      - name: Repair filing dates collapsed onto the scrape date (NSE an_dt bug)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: python -m scraper.fix_dates --apply
       - name: Re-title hidden transcripts already in the DB
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

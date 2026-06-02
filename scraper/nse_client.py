@@ -109,7 +109,14 @@ def fetch_announcements(
 def _to_announcement(nse_symbol: str, raw: dict[str, Any]) -> Optional[Announcement]:
     if not isinstance(raw, dict):
         return None
-    title = raw.get("desc") or raw.get("subject") or raw.get("attchmntText")
+    # NSE `desc` is frequently a generic category bucket ("Updates",
+    # "Announcement", "Company Update") while the actual headline lives in
+    # `attchmntText` (e.g. "Infosys to Announce First Quarter Results on ...").
+    # Prefer the more specific text so the title carries real meaning — this
+    # also lets the app's intimation/transcript heuristics work correctly.
+    desc = str(raw.get("desc") or raw.get("subject") or "").strip()
+    detail = str(raw.get("attchmntText") or "").strip()
+    title = detail if len(detail) > len(desc) else (desc or detail)
     if not title:
         return None
     url = raw.get("attchmntFile") or raw.get("attachmentFile") or raw.get("pdfFile")

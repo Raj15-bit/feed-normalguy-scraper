@@ -16,6 +16,22 @@ import re
 # Title already names it a transcript — the easy, unambiguous case.
 TRANSCRIPT_TITLE_RE = re.compile(r"\btranscript\b", re.I)
 
+# A pre-event NOTICE: announces that results/a call WILL happen on a future
+# date. Its attached PDF is the intimation letter, not a transcript — never
+# retitle these as transcripts even if the body mentions the word.
+_INTIMATION_TITLE_RE = re.compile(
+    r"\b(to\s+announce|will\s+announce|intimation|prior\s+intimation|"
+    r"schedule\s+of|notice\s+of|to\s+be\s+held|will\s+be\s+held|"
+    r"date\s+of\s+(the\s+)?(board|meeting)|reschedul|postpone)\b",
+    re.I,
+)
+
+
+def is_intimation_title(title: str) -> bool:
+    """True when the title is a pre-event notice (announces a future date),
+    not the content document itself."""
+    return bool(_INTIMATION_TITLE_RE.search(title or ""))
+
 # Body says "transcript" near earnings-call context.
 _BODY_TRANSCRIPT_RE = re.compile(r"\btranscript\b", re.I)
 _CALL_CONTEXT_RE = re.compile(

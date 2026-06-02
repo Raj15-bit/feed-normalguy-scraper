@@ -189,6 +189,15 @@ def update_filing_label_title(
     ).eq("id", filing_id).execute()
 
 
+def update_filing_posted_at(*, filing_id: str, posted_at: str, title: str | None = None) -> None:
+    """Correct a filing's posted_at (and optionally its title) — used by the
+    date-repair pass that re-derives the true filing date from the NSE URL."""
+    patch: dict[str, Any] = {"posted_at": posted_at}
+    if title is not None:
+        patch["title"] = title
+    supabase().table("filings").update(patch).eq("id", filing_id).execute()
+
+
 def fetch_filings_page(*, limit: int, offset: int) -> list[dict[str, Any]]:
     """All filings, newest first, paginated — for the global de-dup scan."""
     res = (

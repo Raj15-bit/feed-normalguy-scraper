@@ -181,6 +181,18 @@ def _parse_dt(value: Any) -> datetime:
         "%Y-%m-%d %H:%M:%S",
         "%Y-%m-%d %H:%M:%S.%f",
         "%Y-%m-%d",
+        # NSE/BSE human formats (e.g. "15-Jul-2025 18:30:00", "15-Jul-2025",
+        # "15-07-2025 18:30:00", "15/07/2025") — these were silently falling
+        # through to now(), collapsing every NSE filing onto the scrape date.
+        "%d-%b-%Y %H:%M:%S",
+        "%d-%b-%Y %H:%M",
+        "%d-%b-%Y",
+        "%d %b %Y %H:%M:%S",
+        "%d %b %Y",
+        "%d-%m-%Y %H:%M:%S",
+        "%d-%m-%Y",
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%Y",
     ):
         try:
             dt = datetime.strptime(s[:26] if "." in s else s, fmt)

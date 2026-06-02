@@ -26,6 +26,7 @@ from scraper.db import (
 from scraper.pdf_extract import download_pdf, extract_pages
 from scraper.transcript_detect import (
     TRANSCRIPT_TITLE_RE,
+    is_intimation_title,
     looks_like_transcript,
     normalize_transcript_title,
 )
@@ -66,6 +67,12 @@ def run(max_rows: int | None = None, allow_download: bool = True) -> int:
             title = r.get("title") or ""
             if TRANSCRIPT_TITLE_RE.search(title):
                 stats["already_transcript"] += 1
+                continue
+            # A pre-event notice ("X to Announce Results on <date>") is the
+            # intimation letter, not a transcript — never promote it, even if
+            # its body happens to mention "transcript" / "earnings call".
+            if is_intimation_title(title):
+                stats["intimation_skipped"] += 1
                 continue
             body = _body_for(r["source_url"], allow_download)
             if not looks_like_transcript(title, body):
