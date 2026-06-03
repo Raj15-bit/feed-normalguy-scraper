@@ -28,6 +28,7 @@ from scraper.db import (
     queue_alerts,
     upsert_content_cache,
 )
+from scraper.doc_period import classify_doc, decide_period
 from scraper.embedder import embed_all
 from scraper.pdf_extract import download_pdf, extract_pages
 from scraper.summarizer import summarize
@@ -96,6 +97,17 @@ def process_announcement(
             labels = [l for l in labels if l != "concall"] or ["other"]
             label = _pick_primary(labels)
 
+        # Decide the document TYPE + fiscal PERIOD once, from the body, and store
+        # them (migration 0014) so the app reads columns instead of re-guessing.
+        doc_kind, is_transcript = classify_doc(store_title, body, label)
+        fiscal_year, fiscal_quarter, period_source = decide_period(
+            title=store_title,
+            body=body,
+            posted_at=ann.posted_at,
+            source_url=ann.source_url,
+            doc_kind=doc_kind,
+        )
+
         chunks = chunk_pages(pages)
         if not chunks:
             return PipelineResult(status="skipped_scanned")
@@ -129,6 +141,11 @@ def process_announcement(
             bse_subcategory=ann.bse_subcategory,
             ai_headline=ai_headline,
             ai_summary_bullets=ai_bullets,
+            doc_kind=doc_kind,
+            fiscal_year=fiscal_year,
+            fiscal_quarter=fiscal_quarter,
+            period_source=period_source,
+            is_transcript=is_transcript,
         )
         insert_chunks(
             filing_id=filing_id,

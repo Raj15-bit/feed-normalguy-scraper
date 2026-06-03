@@ -81,6 +81,11 @@ def insert_filing(
     bse_subcategory: Optional[str] = None,
     ai_headline: Optional[str] = None,
     ai_summary_bullets: Optional[list[str]] = None,
+    doc_kind: Optional[str] = None,
+    fiscal_year: Optional[int] = None,
+    fiscal_quarter: Optional[int] = None,
+    period_source: Optional[str] = None,
+    is_transcript: bool = False,
 ) -> str:
     """Inserts a filing row and returns its id.
 
@@ -89,6 +94,11 @@ def insert_filing(
     0006), which is what the home feed card renders. Also seeds the multi-label
     `labels` array (migration 0003) with the primary label so cards show a
     tick-mark badge immediately; a later re-classify pass can widen it.
+
+    The document TYPE + fiscal PERIOD are decided once from the body
+    (scraper/doc_period.py) and stored in doc_kind / fiscal_year /
+    fiscal_quarter / period_source / is_transcript (migration 0014) so the app
+    reads them instead of re-guessing from the title + date.
     """
     from datetime import timezone
 
@@ -103,7 +113,16 @@ def insert_filing(
         "page_count": page_count,
         "bse_category": bse_category,
         "bse_subcategory": bse_subcategory,
+        "is_transcript": is_transcript,
     }
+    if doc_kind is not None:
+        row["doc_kind"] = doc_kind
+    if fiscal_year is not None:
+        row["fiscal_year"] = fiscal_year
+    if fiscal_quarter is not None:
+        row["fiscal_quarter"] = fiscal_quarter
+    if period_source is not None:
+        row["period_source"] = period_source
     if ai_headline:
         row["ai_headline"] = ai_headline
         row["ai_summary_bullets"] = ai_summary_bullets or []
@@ -198,12 +217,37 @@ def update_filing_posted_at(*, filing_id: str, posted_at: str, title: str | None
     supabase().table("filings").update(patch).eq("id", filing_id).execute()
 
 
+def update_filing_doc_period(
+    *,
+    filing_id: str,
+    doc_kind: str,
+    fiscal_year: Optional[int],
+    fiscal_quarter: Optional[int],
+    period_source: str,
+    is_transcript: bool,
+) -> None:
+    """Backfill the decide-once columns (migration 0014) on an existing row.
+    Idempotent: writes deterministic values derived from the cached body."""
+    supabase().table("filings").update(
+        {
+            "doc_kind": doc_kind,
+            "fiscal_year": fiscal_year,
+            "fiscal_quarter": fiscal_quarter,
+            "period_source": period_source,
+            "is_transcript": is_transcript,
+        }
+    ).eq("id", filing_id).execute()
+
+
 def fetch_filings_page(*, limit: int, offset: int) -> list[dict[str, Any]]:
-    """All filings, newest first, paginated — for the global de-dup scan."""
+    """All filings, newest first, paginated — for the global de-dup scan and the
+    doc_kind backfill (carries doc_kind so the backfill can skip done rows)."""
     res = (
         supabase()
         .table("filings")
-        .select("id,company_id,title,label,labels,source_url,posted_at")
+        .select(
+            "id,company_id,title,label,labels,source_url,posted_at,doc_kind"
+        )
         .order("posted_at", desc=True)
         .order("id", desc=True)
         .range(offset, offset + limit - 1)

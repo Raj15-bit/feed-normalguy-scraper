@@ -25,7 +25,10 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 from scraper.config import get_config, setup_logging
-from scraper.db import fetch_filings_page, update_filing_posted_at
+
+# NOTE: scraper.db is imported lazily inside run() (it pulls in the supabase
+# client). Keeping it out of module scope lets pure helpers here — date_from_url,
+# _quarter_label — be imported (e.g. by scraper.doc_period) without DB deps.
 
 log = logging.getLogger("scraper.fix_dates")
 
@@ -93,6 +96,8 @@ def _better_title(title: str, label: str, when: datetime) -> str | None:
 
 
 def run(*, apply: bool, max_rows: int | None = None) -> int:
+    from scraper.db import fetch_filings_page, update_filing_posted_at
+
     setup_logging()
     get_config()
     stats: Counter[str] = Counter()
