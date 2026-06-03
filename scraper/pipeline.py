@@ -38,6 +38,11 @@ from scraper.transcript_detect import (
 
 log = logging.getLogger(__name__)
 
+# Don't spend a DeepSeek summary call on thin one-line notices (newspaper
+# publications, trading-window intimations, etc.) — the card just shows the
+# title for these. Only summarise filings with substantial extracted text.
+SUMMARY_MIN_BODY_CHARS = 1_200
+
 
 @dataclass
 class PipelineResult:
@@ -99,7 +104,7 @@ def process_announcement(
 
         ai_headline: str | None = None
         ai_bullets: list[str] | None = None
-        if get_config().summary_enabled:
+        if get_config().summary_enabled and len(body) >= SUMMARY_MIN_BODY_CHARS:
             try:
                 ai_headline, ai_bullets = summarize(
                     title=ann.title,

@@ -1,13 +1,13 @@
 name: coverage
 
-# Every 6 hours: process a ROTATING SLICE (~13 companies) of the Nifty-50,
-# detect missing FY2026 transcripts/PPT/credit/annual + 6-month announcements,
-# and fill the gaps with targeted idempotent backfills. Small jobs, not one
-# giant run — all 50 companies are covered across the day.
+# Once daily: process a ROTATING SLICE of the Nifty-50, detect missing FY2026
+# transcripts/PPT/credit/annual + 6-month announcements, and fill gaps with
+# targeted idempotent backfills. Daily (not 6-hourly) to keep DeepSeek spend
+# low — re-runs are free (existing filings are skipped before any LLM call).
 
 on:
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: "0 3 * * *"
   workflow_dispatch:
     inputs:
       slice:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Optional
 
 from openai import OpenAI
@@ -20,8 +21,13 @@ log = logging.getLogger(__name__)
 
 _client: Optional[OpenAI] = None
 
-# Same excerpt budget the app uses (lib/summarize.ts slices 12000 chars).
-_MAX_INPUT_CHARS = 12_000
+# Summaries run on the CHEAPEST flash tier — NOT the pricier auto-routed
+# "deepseek-chat". Override on CI with DEEPSEEK_SUMMARY_MODEL_OVERRIDE.
+_SUMMARY_MODEL = os.environ.get("DEEPSEEK_SUMMARY_MODEL_OVERRIDE", "deepseek-v4-flash")
+
+# Excerpt budget, trimmed 12k → 8k chars to cut input-token cost ~⅓; a ~50-word
+# summary doesn't need more context.
+_MAX_INPUT_CHARS = 8_000
 
 # Verbatim copy of lib/summarize.ts SYSTEM prompt (~50 word bullet context).
 _SYSTEM = (
@@ -66,7 +72,7 @@ def _word_count(bullets: list[str]) -> int:
 )
 def _call(user: str) -> str:
     res = _ds_client().chat.completions.create(
-        model="deepseek-chat",
+        model=_SUMMARY_MODEL,
         response_format={"type": "json_object"},
         temperature=0.1,
         max_tokens=800,

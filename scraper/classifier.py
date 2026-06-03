@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from typing import Optional
 
@@ -13,6 +14,10 @@ from scraper.config import get_config
 from scraper.labels import LABEL_SLUGS
 
 log = logging.getLogger(__name__)
+
+# LLM classification runs on the CHEAPEST flash tier — NOT the pricier
+# auto-routed "deepseek-chat". Override on CI with DEEPSEEK_MODEL_OVERRIDE.
+_CLASSIFY_MODEL = os.environ.get("DEEPSEEK_MODEL_OVERRIDE", "deepseek-v4-flash")
 
 # Layer 1: BSE category/subcategory → label. Built from real BSE data;
 # covers ~70% of filings without any LLM call.
@@ -206,7 +211,7 @@ def classify_via_llm_multi(
         f"Filing excerpt: {excerpt}\nLabels:"
     )
     res = _deepseek_client().chat.completions.create(
-        model="deepseek-chat",
+        model=_CLASSIFY_MODEL,
         response_format={"type": "json_object"},
         temperature=0,
         messages=[
@@ -259,7 +264,7 @@ def classify_via_llm(title: str, bse_subcategory: Optional[str]) -> str:
         f"Title: {title}\nBSE subcategory: {bse_subcategory or 'n/a'}\nLabel:"
     )
     res = _deepseek_client().chat.completions.create(
-        model="deepseek-chat",
+        model=_CLASSIFY_MODEL,
         response_format={"type": "json_object"},
         temperature=0,
         messages=[
