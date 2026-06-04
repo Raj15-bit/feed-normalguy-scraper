@@ -297,25 +297,37 @@ def delete_filing(filing_id: str) -> None:
 
 
 def fetch_null_embedding_chunks(
-    *, limit: int, after_id: Optional[str] = None, company_id: Optional[str] = None
+    *, limit: int, company_id: Optional[str] = None
 ) -> list[dict[str, Any]]:
-    """Chunks whose embedding is NULL (id + text), ordered by id — input to the
-    embedding backfill. `after_id` is a keyset cursor (id > after_id) so the scan
-    advances past rows we skip (empty text) instead of re-fetching them forever;
-    `company_id` narrows to one company."""
+    """A page of chunks whose embedding is NULL (id + text) — input to the
+    embedding backfill. NO order-by (an `is null` + sort plan hits the DB
+    statement timeout); the backfill writes these rows so they leave the NULL set,
+    and re-queries for the next page. `company_id` narrows to one company."""
     q = (
         supabase()
         .table("filing_chunks")
         .select("id,text")
         .is_("embedding", "null")
-        .order("id")
     )
     if company_id:
         q = q.eq("company_id", company_id)
-    if after_id:
-        q = q.gt("id", after_id)
     res = q.limit(limit).execute()
     return res.data or []
+
+
+def count_null_embedding_chunks(*, company_id: Optional[str] = None) -> int:
+    """How many chunks still have a NULL embedding (for --report)."""
+    q = (
+        supabase()
+        .table("filing_chunks")
+        .select("id", count="exact")
+        .is_("embedding", "null")
+        .limit(1)
+    )
+    if company_id:
+        q = q.eq("company_id", company_id)
+    res = q.execute()
+    return res.count or 0
 
 
 def update_chunk_embedding(*, chunk_id: str, embedding: list[float]) -> None:

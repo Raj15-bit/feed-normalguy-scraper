@@ -25,6 +25,7 @@ from collections import Counter
 
 from scraper.config import get_config, setup_logging
 from scraper.db import (
+    count_null_embedding_chunks,
     fetch_null_embedding_chunks,
     list_companies,
     update_chunk_embedding,
@@ -49,52 +50,54 @@ def run(
             raise SystemExit(f"no company with slug={company_slug!r}")
         company_id = match[0].id
 
+    if not apply:
+        n = count_null_embedding_chunks(company_id=company_id)
+        log.info("REPORT: %d chunks have a NULL embedding%s", n,
+                 f" (company={company_slug})" if company_slug else " (universe)")
+        return 0
+
+    # APPLY: page through the NULL set. Each written row leaves the set, so the
+    # next fetch returns the next page — no cursor needed. Stop when a page is
+    # empty (done) or yields zero writes (only un-embeddable/empty-text rows left).
     stats: Counter[str] = Counter()
-    after_id: str | None = None
-    done = 0
+    written = 0
     while True:
-        rows = fetch_null_embedding_chunks(
-            limit=_BATCH, after_id=after_id, company_id=company_id
-        )
+        rows = fetch_null_embedding_chunks(limit=_BATCH, company_id=company_id)
         if not rows:
             break
-        after_id = rows[-1]["id"]  # advance cursor regardless of skips
         texts = [(r.get("text") or "") for r in rows]
-        # Empty-text chunks can't be embedded — skip (cursor already advanced).
         embed_idx = [i for i, t in enumerate(texts) if t.strip()]
         stats["scanned"] += len(rows)
         stats["empty"] += len(rows) - len(embed_idx)
         if not embed_idx:
-            continue
+            log.warning("page had only empty-text chunks — stopping")
+            break
 
         vecs = embed_all([texts[i] for i in embed_idx])
         if all(v is None for v in vecs):
             log.error("embedder returned all-NULL — model unavailable; aborting")
-            log.info("backfill_embeddings %s %s", "APPLY" if apply else "REPORT", dict(stats))
+            log.info("backfill_embeddings APPLY %s", dict(stats))
             return 1
 
+        wrote_this_page = 0
         for j, i in enumerate(embed_idx):
             emb = vecs[j]
             if emb is None:
                 stats["embed_failed"] += 1
                 continue
-            if apply:
-                update_chunk_embedding(chunk_id=rows[i]["id"], embedding=emb)
-                stats["written"] += 1
-            else:
-                stats["would_write"] += 1
-            done += 1
-            if max_rows and done >= max_rows:
-                log.info("max reached (%d)", max_rows)
-                log.info(
-                    "backfill_embeddings %s %s",
-                    "APPLY" if apply else "REPORT",
-                    dict(stats),
-                )
+            update_chunk_embedding(chunk_id=rows[i]["id"], embedding=emb)
+            stats["written"] += 1
+            written += 1
+            wrote_this_page += 1
+            if max_rows and written >= max_rows:
+                log.info("max reached (%d) %s", max_rows, dict(stats))
                 return 0
-        log.info("progress: %s (cursor=%s)", dict(stats), after_id)
+        log.info("progress: %s", dict(stats))
+        if wrote_this_page == 0:
+            log.warning("page yielded zero writes — stopping to avoid a loop")
+            break
 
-    log.info("backfill_embeddings %s %s", "APPLY" if apply else "REPORT", dict(stats))
+    log.info("backfill_embeddings APPLY DONE %s", dict(stats))
     return 0
 
 
