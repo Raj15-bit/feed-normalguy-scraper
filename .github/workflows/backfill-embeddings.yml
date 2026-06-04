@@ -1,0 +1,61 @@
+name: backfill-embeddings
+
+# Re-embeds filing_chunks whose embedding is NULL (~40% of chunks, all older
+# ones) with the keyless fastembed model (bge-small-en-v1.5, 384-dim) so vector
+# / meaning-based chat retrieval covers the full history, not just the latest
+# docs. Idempotent + resumable (keyset cursor over null rows).
+#
+# Run reliance first to verify, then full=true for the universe (re-run as needed
+# — each run resumes from the remaining null rows). Pure REST: needs only
+# SUPABASE_URL + SUPABASE_SERVICE_KEY (no SUPABASE_DB_URL).
+
+on:
+  workflow_dispatch:
+    inputs:
+      company_slug:
+        description: "Backfill just this company (e.g. reliance). Ignored when full=true."
+        required: false
+        default: "reliance"
+        type: string
+      full:
+        description: "Backfill the WHOLE universe (ignores company_slug)"
+        required: false
+        default: false
+        type: boolean
+      limit:
+        description: "Optional cap on rows written this run (blank = no cap)"
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  group: backfill-embeddings
+  cancel-in-progress: false
+
+jobs:
+  embed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Re-embed NULL-embedding chunks
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          set -euo pipefail
+          ARGS="--apply"
+          if [ "${{ inputs.full }}" = "true" ]; then
+            echo "backfilling the whole universe"
+          else
+            ARGS="$ARGS --company-slug ${{ inputs.company_slug }}"
+            echo "backfilling company=${{ inputs.company_slug }}"
+          fi
+          if [ -n "${{ inputs.limit }}" ]; then ARGS="$ARGS --limit ${{ inputs.limit }}"; fi
+          python -m scraper.backfill_embeddings $ARGS

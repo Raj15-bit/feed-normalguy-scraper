@@ -296,6 +296,35 @@ def delete_filing(filing_id: str) -> None:
     supabase().table("filings").delete().eq("id", filing_id).execute()
 
 
+def fetch_null_embedding_chunks(
+    *, limit: int, after_id: Optional[str] = None, company_id: Optional[str] = None
+) -> list[dict[str, Any]]:
+    """Chunks whose embedding is NULL (id + text), ordered by id — input to the
+    embedding backfill. `after_id` is a keyset cursor (id > after_id) so the scan
+    advances past rows we skip (empty text) instead of re-fetching them forever;
+    `company_id` narrows to one company."""
+    q = (
+        supabase()
+        .table("filing_chunks")
+        .select("id,text")
+        .is_("embedding", "null")
+        .order("id")
+    )
+    if company_id:
+        q = q.eq("company_id", company_id)
+    if after_id:
+        q = q.gt("id", after_id)
+    res = q.limit(limit).execute()
+    return res.data or []
+
+
+def update_chunk_embedding(*, chunk_id: str, embedding: list[float]) -> None:
+    """Set the embedding for a single chunk row (used by the embedding backfill)."""
+    supabase().table("filing_chunks").update({"embedding": embedding}).eq(
+        "id", chunk_id
+    ).execute()
+
+
 def insert_chunks(
     *,
     filing_id: str,
